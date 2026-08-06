@@ -1276,13 +1276,19 @@
 
         drawText(`${Math.round(cur.temperature_2m)}°`, 34, 9, '#ffffff', 2);
 
-        const rx = 82;
+        // dim labels, bright values; color only where it carries meaning
+        const rx = 82, LBL = '#66707a';
         drawText(label, rx, 1, '#ffffff');
-        let x = drawText(`HI ${Math.round(weatherData.daily.temperature_2m_max[0])}°`, rx, 9, '#ff9e9e');
-        drawText(`LO ${Math.round(weatherData.daily.temperature_2m_min[0])}°`, x + 4, 9, '#9ecbff');
-        drawText(`FEELS ${Math.round(cur.apparent_temperature)}°`, rx, 17, '#ffd27a');
-        x = drawText(`WIND ${Math.round(cur.wind_speed_10m)} ${COMPASS[Math.round(cur.wind_direction_10m / 22.5) % 16]}`, rx, 25, '#9ef0a0');
-        drawText(`HUM ${cur.relative_humidity_2m}%`, x + 6, 25, '#c9c9c9');
+        let x = drawText('HI ', rx, 9, LBL);
+        x = drawText(`${Math.round(weatherData.daily.temperature_2m_max[0])}°`, x, 9, '#ff9e9e');
+        x = drawText('  LO ', x, 9, LBL);
+        drawText(`${Math.round(weatherData.daily.temperature_2m_min[0])}°`, x, 9, '#9ecbff');
+        x = drawText('FEELS ', rx, 17, LBL);
+        x = drawText(`${Math.round(cur.apparent_temperature)}°`, x, 17, '#ffffff');
+        x = drawText('  HUM ', x, 17, LBL);
+        drawText(`${cur.relative_humidity_2m}%`, x, 17, '#ffffff');
+        x = drawText('WIND ', rx, 25, LBL);
+        drawText(`${Math.round(cur.wind_speed_10m)} MPH ${COMPASS[Math.round(cur.wind_direction_10m / 22.5) % 16]}`, x, 25, '#ffffff');
       },
     },
     {
@@ -1354,26 +1360,52 @@
       id: 'clock', name: 'Clock',
       render() {
         const now = locNow(); // the ZIP's wall clock
-        const s = now.getSeconds();
+        const s = now.getSeconds(), mi = now.getMinutes();
         let h = now.getHours();
         const ampm = h >= 12 ? 'PM' : 'AM';
         h = h % 12 || 12;
-        const mm = String(now.getMinutes()).padStart(2, '0');
-        // colon blinks each second: drawn black (invisible) on odd seconds
-        let x = 68 - measureText(`${h}:${mm}`, 2);
-        x = drawText(`${h}`, x, 8, '#ffffff', 2);
-        x = drawText(':', x, 8, s % 2 ? '#000' : '#ffffff', 2);
-        drawText(mm, x, 8, '#ffffff', 2);
+        const mm = String(mi).padStart(2, '0');
 
-        // seconds bar: one pixel per second
-        rect(8, 26, 60, 2, '#243040');
-        rect(8, 26, s + 1, 2, '#55aaff');
+        // analog face, left: hatched rim, hour ticks, sweeping hands
+        const cx = 16, cy = 16, r = 14;
+        for (let dy = -r; dy <= r; dy++)
+          for (let dx = -r; dx <= r; dx++) {
+            const d2 = dx * dx + dy * dy;
+            if (d2 > r * r + r * 0.5) continue;
+            let c = '#12171e';
+            if (d2 > (r - 1.6) ** 2) c = hatch(cx + dx, cy + dy) ? '#3a4650' : '#28303a';
+            px(cx + dx, cy + dy, c);
+          }
+        for (let k = 0; k < 12; k++) {
+          const a = k / 12 * 2 * Math.PI;
+          px(cx + Math.round(Math.sin(a) * (r - 2.5)), cy - Math.round(Math.cos(a) * (r - 2.5)),
+             k % 3 === 0 ? '#9aa6b2' : '#454f5a');
+        }
+        const hand = (ang, len, color) => {
+          for (let k = 1; k <= len; k++)
+            px(cx + Math.round(Math.sin(ang) * k), cy - Math.round(Math.cos(ang) * k), color);
+        };
+        hand((h % 12 + mi / 60) / 12 * 2 * Math.PI, r - 8, '#e8f0ff'); // hour
+        hand((mi + s / 60) / 60 * 2 * Math.PI, r - 5, '#e8f0ff');      // minute
+        hand(s / 60 * 2 * Math.PI, r - 3, '#ff4136');                  // second
+        px(cx, cy, '#ffd27a');                                         // hub
 
-        const rx = 84;
-        drawText(DAYS[now.getDay()], rx, 2, '#ffffff');
-        drawText(`${MONTHS[now.getMonth()]} ${now.getDate()} ${now.getFullYear()}`, rx, 11, '#9ecbff');
-        const ax = drawText(ampm, rx, 20, '#ffd27a');
-        drawText(`:${String(s).padStart(2, '0')}`, ax + 2, 20, '#c9c9c9');
+        // digital: big time, AM/PM + ticking seconds stacked after it
+        let x = drawText(`${h}`, 38, 6, '#ffffff', 2);
+        x = drawText(':', x, 6, s % 2 ? '#000' : '#ffffff', 2); // blinking colon
+        x = drawText(mm, x, 6, '#ffffff', 2);
+        drawText(ampm, x + 3, 6, '#8f99a3');
+        drawText(String(s).padStart(2, '0'), x + 3, 13, '#ffd27a');
+
+        // date, right-aligned and balanced against the big time
+        drawText(DAYS[now.getDay()], 190 - measureText(DAYS[now.getDay()]), 4, '#ffffff');
+        const dstr = `${MONTHS[now.getMonth()]} ${now.getDate()} ${now.getFullYear()}`;
+        drawText(dstr, 190 - measureText(dstr), 13, '#9ecbff');
+
+        // minute progress bar with quarter ticks
+        rect(38, 27, 152, 2, '#1c242e');
+        rect(38, 27, Math.round(s / 59 * 152), 2, '#55aaff');
+        [0, 38, 76, 114, 151].forEach(t => { px(38 + t, 26, '#454f5a'); });
       },
     },
     {
@@ -1434,10 +1466,12 @@
                        [0.77,'LAST QUARTER'],[0.98,'WANING CRESCENT'],[1.01,'NEW MOON']];
         const name = names.find(([lim]) => p < lim)[1];
 
-        const rx = 40;
+        const rx = 40, LBL = '#66707a';
         drawText(name, rx, 1, '#ffffff');
-        drawText(`${illum}% ILLUMINATED`, rx, 9, '#ffd27a');
-        drawText(`AGE ${age.toFixed(1)} DAYS`, rx, 17, '#9ecbff');
+        let mx = drawText(`${illum}%`, rx, 9, '#ffd27a');
+        drawText(' ILLUMINATED', mx, 9, LBL);
+        mx = drawText('AGE ', rx, 17, LBL);
+        drawText(`${age.toFixed(1)} DAYS`, mx, 17, '#ffffff');
         const dFull = ((0.5 - p + 1) % 1) * SYNODIC;
         const dNew = ((1 - p) % 1) * SYNODIC;
         drawText(dFull <= dNew ? `FULL MOON IN ${Math.ceil(dFull)}D`
@@ -1573,13 +1607,15 @@
           if (target[by * FBW + x] !== lineV) px(x, by, '#4a5560');
         rect(cx1 - 1, prevY - 1, 3, 3, (beat & 1) ? col : '#ffffff'); // pulsing last price
 
-        // change in $ and %, right-aligned
+        // change in $ and %, right-aligned with dim labels
         const chg = price - prevClose;
         const pct = prevClose ? chg / prevClose * 100 : 0;
         const sign = chg >= 0 ? '+' : '-';
         const s1 = `${sign}${Math.abs(chg) >= 100 ? Math.abs(chg).toFixed(0) : Math.abs(chg).toFixed(2)}`;
         const s2 = `${sign}${Math.abs(pct).toFixed(2)}%`;
+        drawText('CHG ', 190 - measureText(`CHG ${s1}`), 16, '#66707a');
         drawText(s1, 190 - measureText(s1), 16, col);
+        drawText('24H ', 190 - measureText(`24H ${s2}`), 25, '#66707a');
         drawText(s2, 190 - measureText(s2), 25, col);
         if (!live) drawText('SAMPLE', 4, 19, '#5a6a75');
       },
@@ -1753,7 +1789,7 @@
         const when = `${MONTHS[dNet.getMonth()]} ${dNet.getDate()} • ${h12}:${String(dNet.getMinutes()).padStart(2, '0')} ${dNet.getHours() >= 12 ? 'PM' : 'AM'}`;
         let ix = 36;
         if (!/spacex|nasa/i.test(provider) && provider)
-          ix = drawText(`${provider.split(' ')[0].toUpperCase()} • `, ix, 9, '#ffffff');
+          ix = drawText(`${provider.split(' ')[0].toUpperCase()} • `, ix, 9, '#66707a');
         ix = drawText(when, ix, 9, '#9ecbff');
         const statusCol = /go/i.test(status) ? '#2ecc40'
           : /tb[cd]/i.test(status) ? '#ffe000'
@@ -1815,13 +1851,18 @@
         }
 
         const p = issPosAt(Date.now());
-        drawText(`LAT ${p.lat.toFixed(1)}°  LON ${p.lon.toFixed(1)}°`, tx, 9, '#9ecbff');
+        const LBL = '#66707a';
+        let lx = drawText('LAT ', tx, 9, LBL);
+        lx = drawText(`${p.lat.toFixed(1)}°`, lx, 9, '#9ecbff');
+        lx = drawText('  LON ', lx, 9, LBL);
+        drawText(`${p.lon.toFixed(1)}°`, lx, 9, '#9ecbff');
 
         if (issPass) {
           const dp = toLoc(issPass); // shown in the ZIP's timezone
           const h12 = dp.getHours() % 12 || 12;
           const ptime = `${MONTHS[dp.getMonth()]} ${dp.getDate()} ${h12}:${String(dp.getMinutes()).padStart(2, '0')}${dp.getHours() >= 12 ? 'P' : 'A'}`;
-          drawText(`NEXT PASS ${ptime}`, tx, 17, '#ffffff');
+          const px2 = drawText('NEXT PASS ', tx, 17, LBL);
+          drawText(ptime, px2, 17, '#ffffff');
           const secs = Math.max(0, Math.floor((issPass - Date.now()) / 1000));
           const ph = Math.floor(secs / 3600), pm = Math.floor(secs % 3600 / 60), ps = secs % 60;
           const cd = ph > 0 ? `IN ${ph}H ${pm}M ${ps}S` : pm > 0 ? `IN ${pm}M ${ps}S` : `IN ${ps}S`;
@@ -1829,8 +1870,8 @@
         } else {
           drawText('NO PASS IN 36H', tx, 17, '#8f99a3');
         }
-        const alt = `ALT ${Math.round(issData.alt)} KM`;
-        drawText(alt, 190 - measureText(alt), 25, '#c9c9c9');
+        const ax2 = drawText('ALT ', 190 - measureText(`ALT ${Math.round(issData.alt)} KM`), 25, LBL);
+        drawText(`${Math.round(issData.alt)} KM`, ax2, 25, '#ffffff');
       },
     },
     {
@@ -1900,11 +1941,16 @@
             rect(0 + sh, y, 4 - sh, 2, '#e10600');
           }
         } else if (ev.series === 'NASCAR') {
-          // the striped bar
-          rect(1, 10, 27, 12, '#15151a');
+          // the mark: skewed black slab, white edges, four slanted stripes
+          for (let y = 0; y < 14; y++) {
+            const sk = Math.floor((13 - y) * 0.45);
+            rect(1 + sk, 9 + y, 25, 1, y === 0 || y === 13 ? '#e8e8e8' : '#0c0c10');
+          }
           ['#ffd659', '#e4002b', '#007ac2', '#6f2da8'].forEach((c, i) => {
-            for (let y = 11; y <= 20; y++)
-              rect(4 + i * 4 + Math.floor((20 - y) * 0.6), y, 2, 1, c);
+            for (let y = 1; y < 13; y++) {
+              const sk = Math.floor((13 - y) * 0.45);
+              rect(4 + sk + i * 5, 9 + y, 3, 1, c);
+            }
           });
         } else {
           // open-wheel car, wheels spinning, speed dashes behind
@@ -2019,14 +2065,17 @@
         drawText('BITCOIN', 36, 1, '#f7931a');
         if (!live) drawText('SAMPLE', 84, 1, '#5a6a75');
         const up = chg >= 0;
-        const ctxt = `24H ${up ? '+' : ''}${chg.toFixed(2)}%`;
-        drawText(ctxt, 190 - measureText(ctxt), 1, up ? '#2ecc40' : '#ff4136');
+        const cval = `${up ? '+' : ''}${chg.toFixed(2)}%`;
+        drawText('24H ', 190 - measureText(`24H ${cval}`), 1, '#66707a');
+        drawText(cval, 190 - measureText(cval), 1, up ? '#2ecc40' : '#ff4136');
 
         drawText(`$${Math.round(price).toLocaleString('en-US')}`, 36, 9, '#ffffff', 2);
 
         if (high != null) {
-          const x = drawText(`HI ${Math.round(high).toLocaleString('en-US')}`, 36, 25, '#ff9e9e');
-          drawText(`LO ${Math.round(low).toLocaleString('en-US')}`, x + 8, 25, '#9ecbff');
+          let x = drawText('HI ', 36, 25, '#66707a');
+          x = drawText(Math.round(high).toLocaleString('en-US'), x, 25, '#ff9e9e');
+          x = drawText('  LO ', x, 25, '#66707a');
+          drawText(Math.round(low).toLocaleString('en-US'), x, 25, '#9ecbff');
         }
       },
     },
@@ -2062,7 +2111,7 @@
         drawText(`GAS • ${stateName.toUpperCase()} AVG`, 36, 1, '#ffffff');
         if (!live) drawText('SAMPLE', 98, 12, '#5a6a75');
         drawText(`$${regular.toFixed(2)}`, 36, 9, '#ffffff', 2);
-        drawText('REGULAR', 36, 25, '#8f99a3');
+        drawText('REGULAR', 36, 25, '#66707a');
         if (weekAgo) {
           const d = regular - weekAgo;
           const wk = `WK ${d >= 0 ? '+' : '-'}${Math.abs(d).toFixed(2)}`;
@@ -2070,7 +2119,7 @@
         }
         const rx = 130;
         const line = (label, v, y) => {
-          drawText(label, rx, y, '#8f99a3');
+          drawText(label, rx, y, '#66707a');
           const t = `$${v.toFixed(2)}`;
           drawText(t, 190 - measureText(t), y, '#ffd27a');
         };
