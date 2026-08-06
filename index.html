@@ -1357,7 +1357,175 @@
   const FPS = 20;
   let globalFrame = 0;
 
+  // Tiny city skyline geometry: [x, width, height-from-ground]
+  const CITY_BLDGS = [
+    [0, 14, 8], [14, 10, 13], [24, 8, 6], [32, 12, 17], [44, 9, 9],
+    [53, 13, 21], [66, 10, 12], [76, 8, 7], [84, 14, 15], [98, 9, 10],
+    [107, 12, 19], [119, 8, 8], [127, 13, 12], [140, 10, 16], [150, 9, 7],
+    [159, 12, 11], [171, 10, 14], [181, 11, 6],
+  ];
+  // sky palette across sun-altitude stages (bottom band -> zenith)
+  const CITY_SKY = [
+    ['#0a0e1e', '#080a18', '#050712', '#03040c'],   // deep night
+    ['#3a2a5e', '#241a44', '#120e2c', '#080618'],   // twilight
+    ['#ff7a2a', '#c04058', '#5a2a6a', '#1c1440'],   // horizon fire
+    ['#ffb050', '#ff9a70', '#8a6aa8', '#3a4a90'],   // golden
+    ['#9ecbff', '#78aaee', '#4a7ade', '#2a55b8'],   // full day
+  ].map(st => st.map(hex2rgb));
+
   const channels = [
+    {
+      id: 'city', name: 'Tiny City',
+      render(f) {
+        if (!weatherData || !weatherData.daily.sunrise) {
+          drawText('LOADING CITY', (FBW - measureText('LOADING CITY')) / 2, 12, '#8f99a3');
+          return;
+        }
+        const beat = Math.floor(f / 5);
+        const rnd = i => { const v = Math.sin(i * 127.1) * 43758.5453; return v - Math.floor(v); };
+        const now = locNow();
+        const D = weatherData.daily;
+        const code = weatherData.current.weather_code;
+        const raining = (code >= 51 && code <= 67) || (code >= 80 && code <= 82) || code >= 95;
+        const snowing = (code >= 71 && code <= 77) || code === 85 || code === 86;
+        const storming = code >= 95;
+        const cloudy = code === 3 ? 6 : code === 2 ? 3 : code === 1 ? 1 : 0;
+
+        // where is the sun? altitude in [-1, 1] from today's real sun times
+        const sr = new Date(D.sunrise[0]), ss = new Date(D.sunset[0]);
+        const srN = D.sunrise[1] ? new Date(D.sunrise[1]) : new Date(sr.getTime() + 86400000);
+        let alt, frac; // frac: progress across the sky
+        if (now >= sr && now <= ss) {
+          frac = (now - sr) / (ss - sr);
+          alt = Math.sin(Math.PI * frac);
+        } else {
+          const from = now < sr ? new Date(ss.getTime() - 86400000) : ss;
+          const to = now < sr ? sr : srN;
+          frac = Math.max(0, Math.min(1, (now - from) / (to - from)));
+          alt = -Math.sin(Math.PI * frac);
+        }
+
+        // sky: altitude -> stage coordinate, dimmed under weather
+        const BP = [[-1, 0], [-0.28, 0], [-0.07, 1], [0.02, 2], [0.2, 3], [0.55, 4], [1, 4]];
+        let u = 4;
+        for (let i = 1; i < BP.length; i++)
+          if (alt <= BP[i][0]) {
+            u = BP[i - 1][1] + (alt - BP[i - 1][0]) / (BP[i][0] - BP[i - 1][0]) * (BP[i][1] - BP[i - 1][1]);
+            break;
+          }
+        const flash = storming && ((f >> 2) % 23) === 0;
+        const dim = flash ? 1.7 : storming ? 0.5 : raining || code === 3 ? 0.62 : cloudy >= 3 ? 0.8 : 1;
+        const si = Math.min(3, Math.floor(u)), st = Math.min(1, u - si);
+        for (let y = 0; y < 30; y++) {
+          const rowT = Math.min(0.999, (29 - y) / 29) * 3;
+          const bi = Math.floor(rowT), bt = rowT - bi;
+          const ch2 = k => {
+            const lo = CITY_SKY[si][bi][k] * (1 - bt) + CITY_SKY[si][bi + 1][k] * bt;
+            const hi = CITY_SKY[si + 1] ? CITY_SKY[si + 1][bi][k] * (1 - bt) + CITY_SKY[si + 1][bi + 1][k] * bt : lo;
+            return Math.max(0, Math.min(255, (lo * (1 - st) + hi * st) * dim));
+          };
+          const v = rgb565(ch2(0), ch2(1), ch2(2));
+          for (let x = 0; x < FBW; x++) pset(x, y, v);
+        }
+
+        // stars come out as the sky darkens
+        if (alt < 0.02 && !raining && cloudy < 4) {
+          const fade = Math.min(1, -alt * 8 + 0.15);
+          const n = Math.round(40 * fade);
+          for (let i = 0; i < n; i++) {
+            const x = Math.floor(rnd(i + 7) * FBW), y = Math.floor(rnd(i + 207) * 24);
+            px(x, y, ((beat + i) % 9) === 0 ? '#ffffff' : '#6a7488');
+          }
+        }
+
+        // the sun arcs across the real sky
+        if (alt > -0.12) {
+          const sx = Math.round(8 + frac * 176);
+          const sy = Math.round(29 - alt * 24);
+          const low = alt < 0.25;
+          for (let dy = -5; dy <= 5; dy++)
+            for (let dx = -5; dx <= 5; dx++) {
+              const d2 = dx * dx + dy * dy, X = sx + dx, Y = sy + dy;
+              if (Y < 0 || Y > 29) continue;
+              if (d2 <= 2) px(X, Y, '#fff6d0');
+              else if (d2 <= 9) px(X, Y, low ? '#ffb030' : '#ffd400');
+              else if (d2 <= 27 && hatch(X, Y)) px(X, Y, low ? '#e06020' : '#ffdf70');
+            }
+        }
+
+        // the moon rides the night arc, showing its true phase
+        if (alt < 0.05) {
+          const mx = Math.round(10 + frac * 172);
+          const my2 = Math.round(27 - (-alt) * 21);
+          const SYN = 29.530588853;
+          const mp = ((((Date.now() - Date.UTC(2000, 0, 6, 18, 14)) / 86400000) % SYN + SYN) % SYN) / SYN;
+          const mt = Math.cos(2 * Math.PI * mp), mr = 4;
+          for (let dy = -mr; dy <= mr; dy++) {
+            const w = Math.sqrt(Math.max(0.001, mr * mr - dy * dy));
+            for (let dx = -mr; dx <= mr; dx++) {
+              if (dx * dx + dy * dy > mr * mr + 2) continue;
+              const Y = my2 + dy, X = mx + dx;
+              if (Y < 0 || Y > 29) continue;
+              const db = mp <= 0.5 ? dx - mt * w : -mt * w - dx;
+              px(X, Y, db < 0 ? '#141824' : hatch(X, Y) ? '#b8b8b0' : '#d8d8d0');
+            }
+          }
+        }
+
+        // drifting clouds when the code calls for them
+        for (let i = 0; i < cloudy; i++) {
+          const cxp = Math.round((rnd(i + 31) * 240 + f * (0.1 + rnd(i) * 0.1)) % 232) - 20;
+          const cyp = 2 + Math.round(rnd(i + 61) * 8);
+          const cc2 = alt > 0.1 ? (dim < 0.9 ? '#8a95a0' : '#e8eef4') : '#242c38';
+          miniCloud(cxp, cyp, cc2, alt > 0.1 ? '#67717c' : '#181e28');
+        }
+
+        // skyline: silhouettes, lit windows after dark, beacon on the tower
+        const nightness = alt < -0.05 ? 1 : alt < 0.15 ? 0.6 : 0;
+        for (const [bx, bw, bh] of CITY_BLDGS) {
+          const top = 30 - bh;
+          rect(bx, top, bw, bh, '#0a0c12');
+          if (nightness > 0)
+            for (let wy = top + 2; wy < 28; wy += 3)
+              for (let wx = bx + 2; wx < bx + bw - 1; wx += 3) {
+                const seed = wx * 13.7 + wy * 7.3;
+                let lit = rnd(seed) < 0.5 * nightness;
+                if (rnd(seed + 0.3) < 0.08 && ((beat >> 4) + wx) & 1) lit = !lit; // someone's home
+                if (lit) px(wx, wy, flash ? '#ffffff' : '#ffd27a');
+              }
+        }
+        px(58, 6, (beat & 3) === 0 ? '#ff4136' : '#5a1616'); // tower beacon
+        rect(58, 7, 1, 2, '#0a0c12');
+        rect(0, 30, FBW, 2, '#0a0f0a'); // ground
+
+        // weather in the foreground
+        if (raining) for (let i = 0; i < 16; i++) {
+          const x = Math.floor(rnd(i + 401) * FBW);
+          const y = (Math.floor(f * 1.4) + i * 11) % 28;
+          px(x, y, '#55aaff'); px(x, y + 1, '#3a8adb');
+        }
+        if (snowing) for (let i = 0; i < 14; i++) {
+          const x = (Math.floor(rnd(i + 501) * FBW) + ((f >> 3) + i) % 3) % FBW;
+          const y = (Math.floor(f * 0.5) + i * 9) % 29;
+          px(x, y, '#ffffff');
+        }
+        if (flash) { // a bolt with the flash
+          let bx2 = 30 + Math.floor(rnd(f >> 2) * 130), by2 = 2;
+          for (let k = 0; k < 22 && by2 < 28; k++) {
+            px(bx2, by2, '#fff6a0');
+            by2++; bx2 += rnd(k + (f >> 2)) < 0.4 ? -1 : rnd(k * 3) < 0.5 ? 1 : 0;
+          }
+        }
+
+        // corner overlays
+        const cityName = place.name.split(',')[0].toUpperCase();
+        let ox2 = drawText(cityName, 2, 1, '#ffffff');
+        drawText(`${Math.round(weatherData.current.temperature_2m)}°`, ox2 + 4, 1, '#ffd27a');
+        const h12 = now.getHours() % 12 || 12;
+        const ttxt = `${h12}:${String(now.getMinutes()).padStart(2, '0')}${now.getHours() >= 12 ? 'P' : 'A'}`;
+        drawText(ttxt, 190 - measureText(ttxt), 1, '#c9c9c9');
+      },
+    },
     {
       id: 'weather', name: 'Weather',
       render(f) {
@@ -1576,10 +1744,11 @@
     {
       id: 'sun', name: 'Sunrise',
       render(f) {
-        // animated horizon scenes: the sun climbs (left) and sinks
-        // (right) on a 12s loop while the sky gradient shifts with it
-        const scene = (x0, x1, cx, phase, SKY, sun, g) => {
-          const sinN = Math.sin(phase), e = (sinN + 1) / 2; // elevation 0..1
+        // animated horizon scenes: the left sun only rises (sky
+        // brightening), the right sun only sets (sky darkening) —
+        // eased, with a brief hold at each end before the loop restarts
+        const scene = (x0, x1, cx, e, SKY, sun, g) => {
+          const sinN = 2 * e - 1; // sun height from elevation
           for (let y = 0; y <= 23; y++) {                   // shifting sky
             const v = skyColor(SKY, e, (23 - y) / 23);
             for (let x = x0; x <= x1; x++) pset(x, y, v);
@@ -1618,11 +1787,13 @@
             for (let x = x0; x <= x1; x++) pset(x, y, hatch(x, y) ? gv1 : gv2);
         };
 
-        const w = 2 * Math.PI * (f % (12 * FPS)) / (12 * FPS);
-        scene(1, 31, 16, -Math.PI / 2 + w, SKY_DAWN,          // starts below, rising
+        const t = (f % (12 * FPS)) / (12 * FPS);
+        const r0 = Math.min(1, Math.max(0, (t - 0.06) / 0.82)); // hold at the ends
+        const ramp = r0 * r0 * (3 - 2 * r0);                    // eased
+        scene(1, 31, 16, ramp, SKY_DAWN,                        // rising + brightening
           ['#fff8d8', '#ffd400', '#ff9020', '#ff8038'],
           { d1: [10,16,10], l1: [32,56,28], d2: [6,10,7], l2: [22,40,20], hd: [24,36,22], hl: [70,110,60] });
-        scene(160, 190, 175, Math.PI / 2 + w, SKY_DUSK,       // starts high, setting
+        scene(160, 190, 175, 1 - ramp, SKY_DUSK,                // setting + darkening
           ['#ffe8c0', '#ff9020', '#e04818', '#d84028'],
           { d1: [16,9,22], l1: [46,32,48], d2: [10,6,15], l2: [32,22,36], hd: [30,20,36], hl: [90,60,80] });
 
@@ -2758,6 +2929,7 @@
 
   const DEFAULT_CFG = {
     channels: {
+      city:      { on: true, secs: 12 },
       weather:   { on: true, secs: 12 },
       today:     { on: true, secs: 10 },
       forecast:  { on: true, secs: 10 },
@@ -2787,14 +2959,14 @@
       sports:    { on: true, secs: 15 },
     },
     // grouped: weather, conditions, sky, time + news, money, space, sports
-    order: ['weather', 'today', 'forecast', 'rainsoon', 'radar',
+    order: ['city', 'weather', 'today', 'forecast', 'rainsoon', 'radar',
             'aqi', 'smoke', 'pollen', 'uv', 'humidity', 'wind', 'snowcast',
             'sun', 'golden', 'moon', 'stars',
             'clock', 'headlines',
             'stocks', 'btc', 'gas',
             'launch', 'iss', 'air',
             'sports', 'motor', 'esports'],
-    orderVersion: 6, // bump to re-apply the default grouping over saved orders
+    orderVersion: 7, // bump to re-apply the default grouping over saved orders
     transition: 'random',
     zip: '45040',
     symbol: '^GSPC', // S&P 500
