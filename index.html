@@ -1,0 +1,2618 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tickr — 192×32 Virtual Ticker</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+  }
+  body {
+    background: #808080; /* grey page */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    font-family: system-ui, sans-serif;
+  }
+  #ticker {
+    /* Square mode: 192x32 canvas scaled 5.625x with crisp pixels.
+       Round mode: the canvas itself is 6x (1152x192) with LED dots,
+       downscaled smoothly to the same on-screen size. */
+    width: 1080px;
+    height: 180px;
+    max-width: 95vw;
+    image-rendering: pixelated;
+  }
+  #ticker.round {
+    image-rendering: auto;
+    background: #000;
+    border-radius: 4px;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4);
+  }
+  .label {
+    color: #d0d0d0;
+    font-size: 13px;
+    letter-spacing: 0.05em;
+  }
+  #status {
+    color: #b8b8b8;
+    font-size: 11px;
+    letter-spacing: 0.05em;
+  }
+  #controls {
+    background: #3a3a3a;
+    border-radius: 8px;
+    padding: 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    align-items: center;
+    color: #e0e0e0;
+    font-size: 13px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  }
+  #chips {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #2d2d2d;
+    border: 1px solid #4a4a4a;
+    border-radius: 8px;
+    padding: 8px 12px;
+    transition: border-color 0.15s, box-shadow 0.15s, opacity 0.15s;
+  }
+  .chip.dragging { opacity: 0.4; }
+  .chip.active {
+    border-color: #7ab8ff;
+    box-shadow: 0 0 6px rgba(122, 184, 255, 0.45);
+  }
+  .grip {
+    cursor: grab;
+    color: #8a8a8a;
+    user-select: none;
+    font-size: 15px;
+    line-height: 1;
+    padding: 2px 2px 2px 0;
+  }
+  .hint { color: #999; font-size: 12px; }
+  .legend {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    justify-content: center;
+    font-size: 11px;
+    color: #999;
+  }
+  .legend .lg { display: flex; align-items: center; gap: 5px; }
+  .lg-box {
+    width: 13px;
+    height: 13px;
+    border: 1px solid #666;
+    border-radius: 3px;
+    background: #222;
+    color: #fff;
+    font-size: 10px;
+    line-height: 13px;
+    text-align: center;
+  }
+  .lg-box.lg-on { background: #3b6bd6; border-color: #3b6bd6; }
+  .lg-box.lg-ov { background: #e02020; border-color: #e02020; }
+  .lg-chip {
+    width: 18px;
+    height: 11px;
+    border: 1px solid #7ab8ff;
+    border-radius: 3px;
+    background: #2d2d2d;
+    box-shadow: 0 0 4px rgba(122, 184, 255, 0.5);
+  }
+  #controls .row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  #controls label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+  }
+  #controls input[type="number"],
+  #controls input[type="text"] {
+    width: 48px;
+    background: #222;
+    color: #eee;
+    border: 1px solid #555;
+    border-radius: 4px;
+    padding: 2px 5px;
+    font-size: 13px;
+  }
+  #controls input[type="number"] {
+    width: 26px;
+    text-align: center;
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+  #controls input[type="number"]::-webkit-outer-spin-button,
+  #controls input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  .chname { cursor: pointer; }
+  .chname:hover { color: #fff; text-decoration: underline; }
+  .chip.override { border-color: #c03030; }
+  #controls select {
+    background: #222;
+    color: #eee;
+    border: 1px solid #555;
+    border-radius: 4px;
+    padding: 3px 5px;
+    font-size: 13px;
+  }
+  #controls .unit { color: #999; }
+  #zipmodal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.65);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+  }
+  #zipmodal.hidden { display: none; }
+  .zipbox {
+    background: #2d2d2d;
+    border: 1px solid #4a4a4a;
+    border-radius: 10px;
+    padding: 24px 28px;
+    max-width: 340px;
+    text-align: center;
+    color: #e0e0e0;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+  }
+  .zipbox h2 {
+    font-size: 16px;
+    letter-spacing: 0.08em;
+    margin-bottom: 8px;
+  }
+  .zipbox p {
+    font-size: 12.5px;
+    color: #aaa;
+    line-height: 1.5;
+    margin-bottom: 14px;
+  }
+  .zipbox input {
+    width: 90px;
+    background: #222;
+    color: #eee;
+    border: 1px solid #555;
+    border-radius: 5px;
+    padding: 6px 8px;
+    font-size: 16px;
+    text-align: center;
+    letter-spacing: 0.15em;
+  }
+  .zipbox button {
+    background: #4a7ab8;
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    padding: 7px 16px;
+    font-size: 14px;
+    margin-left: 8px;
+    cursor: pointer;
+  }
+  .zipbox button:hover { background: #5a8ac8; }
+  .zipbox .skip {
+    display: block;
+    margin-top: 12px;
+    font-size: 11px;
+    color: #888;
+  }
+</style>
+</head>
+<body>
+  <canvas id="ticker" width="192" height="32"></canvas>
+  <div id="controls"></div>
+  <div class="label">192 × 32 virtual ticker · RGB565</div>
+  <div id="status">loading…</div>
+
+  <div id="zipmodal" class="hidden">
+    <div class="zipbox">
+      <h2>WELCOME TO TICKR</h2>
+      <p>Enter your ZIP code to localize the weather, radar, sunrise
+         times, gas prices, ISS passes, and air traffic.</p>
+      <input id="zipstart" inputmode="numeric" maxlength="5" placeholder="45040">
+      <button id="zipgo">Start</button>
+      <span class="skip">press Esc to skip</span>
+    </div>
+  </div>
+
+<script>
+  const canvas = document.getElementById('ticker');
+  const ctx = canvas.getContext('2d');
+  const statusEl = document.getElementById('status');
+
+  // ---------------------------------------------------------------
+  // Low-level pixel API — RGB565 framebuffer (16 bits per pixel),
+  // like real LED-matrix hardware. All drawing quantizes into the
+  // Uint16Array; blit() expands 5/6/5 back to screen RGB.
+  // ---------------------------------------------------------------
+  const FBW = 192, FBH = 32, NPIX = FBW * FBH;
+  const fb = new Uint16Array(NPIX);
+  let target = fb; // drawing goes here; channels render into temp buffers
+
+  const c565cache = new Map();
+  function to565(color) {
+    let v = c565cache.get(color);
+    if (v === undefined) {
+      const n = parseInt(color.length === 4
+        ? color.replace(/[0-9a-f]/gi, ch => ch + ch).slice(1)
+        : color.slice(1), 16);
+      const r = (n >> 16) & 0xff, g = (n >> 8) & 0xff, b = n & 0xff;
+      v = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+      c565cache.set(color, v);
+    }
+    return v;
+  }
+
+  function pset(x, y, v) {
+    if (x >= 0 && x < FBW && y >= 0 && y < FBH) target[y * FBW + x] = v;
+  }
+  function px(x, y, color) { pset(x, y, to565(color)); }
+  function rect(x, y, w, h, color) {
+    const v = to565(color);
+    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) pset(x + i, y + j, v);
+  }
+
+  // Render a channel frame into an offscreen buffer
+  function renderInto(buf, fn) {
+    target = buf;
+    buf.fill(0);
+    fn();
+    target = fb;
+  }
+
+  const frameImage = ctx.createImageData(FBW, FBH);
+  const DOT = 6, DOT_R = 2.5;      // round mode: 6px cells, LED dot radius
+  let gridCanvas = null;           // pre-rendered unlit-LED background
+  const cssCache = new Map();      // 565 value -> canvas fillStyle string
+
+  function css565(v) {
+    let c = cssCache.get(v);
+    if (c === undefined) {
+      const r5 = (v >> 11) & 0x1f, g6 = (v >> 5) & 0x3f, b5 = v & 0x1f;
+      c = `rgb(${(r5 << 3) | (r5 >> 2)},${(g6 << 2) | (g6 >> 4)},${(b5 << 3) | (b5 >> 2)})`;
+      cssCache.set(v, c);
+    }
+    return c;
+  }
+
+  function blit() {
+    if (typeof cfg !== 'undefined' && cfg.pixels === 'round') {
+      if (gridCanvas) ctx.drawImage(gridCanvas, 0, 0);
+      else { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, FBW * DOT, FBH * DOT); }
+      let last = null;
+      for (let i = 0; i < NPIX; i++) {
+        const v = fb[i];
+        if (!v) continue;
+        const c = css565(v);
+        if (c !== last) { ctx.fillStyle = c; last = c; }
+        ctx.beginPath();
+        ctx.arc((i % FBW) * DOT + DOT / 2, Math.floor(i / FBW) * DOT + DOT / 2, DOT_R, 0, 2 * Math.PI);
+        ctx.fill();
+      }
+      return;
+    }
+    const d = frameImage.data;
+    for (let i = 0; i < NPIX; i++) {
+      const v = fb[i];
+      const r5 = (v >> 11) & 0x1f, g6 = (v >> 5) & 0x3f, b5 = v & 0x1f;
+      d[i * 4]     = (r5 << 3) | (r5 >> 2);  // expand 5 -> 8 bits
+      d[i * 4 + 1] = (g6 << 2) | (g6 >> 4);  // expand 6 -> 8 bits
+      d[i * 4 + 2] = (b5 << 3) | (b5 >> 2);
+      d[i * 4 + 3] = 255;
+    }
+    ctx.putImageData(frameImage, 0, 0);
+  }
+
+  const ticker = {
+    width: FBW,
+    height: FBH,
+    buffer: fb, // raw RGB565 framebuffer — ready to stream to hardware
+    clear(color = '#000') { fb.fill(to565(color)); },
+    setPixel(x, y, color) { px(x, y, color); blit(); },
+    blit,
+  };
+  window.ticker = ticker;
+
+  // ---------------------------------------------------------------
+  // Arcade-style 5x7 bitmap font (variable width), traced from the
+  // sample display. Each glyph is 7 rows of bits (MSB = left pixel).
+  // Every glyph is drawn with a black outline so text stays legible
+  // over colored art, exactly like classic LED signboards.
+  // ---------------------------------------------------------------
+  const FONT = {
+    h: 7,
+    widths: { 'I':3, '°':3, '•':3, '"':3, '.':2, ',':2, ':':2, '(':2, ')':2,
+              "'":1, '!':1, ' ':3 },
+    glyphs: {
+      'A':[4,10,17,17,31,17,17],'B':[30,17,17,30,17,17,30],'C':[14,17,16,16,16,17,14],
+      'D':[30,17,17,17,17,17,30],'E':[31,16,16,30,16,16,31],'F':[31,16,16,30,16,16,16],
+      'G':[14,17,16,19,17,17,15],'H':[17,17,17,31,17,17,17],'I':[7,2,2,2,2,2,7],
+      'J':[1,1,1,1,17,17,14],'K':[17,18,20,24,20,18,17],'L':[16,16,16,16,16,16,31],
+      'M':[17,27,21,21,17,17,17],'N':[17,25,21,19,17,17,17],'O':[14,17,17,17,17,17,14],
+      'P':[30,17,17,30,16,16,16],'Q':[14,17,17,17,21,18,13],'R':[30,17,17,30,20,18,17],
+      'S':[14,17,16,14,1,17,14],'T':[31,4,4,4,4,4,4],'U':[17,17,17,17,17,17,14],
+      'V':[17,17,17,17,17,10,4],'W':[17,17,17,21,21,27,17],'X':[17,17,10,4,10,17,17],
+      'Y':[17,17,10,4,4,4,4],'Z':[31,1,2,14,8,16,31],
+      '0':[14,17,19,21,25,17,14],'1':[4,12,4,4,4,4,31],'2':[14,17,1,6,8,16,31],
+      '3':[14,17,1,6,1,17,14],'4':[2,6,10,18,31,2,2],'5':[31,16,30,1,1,17,14],
+      '6':[6,8,16,30,17,17,14],'7':[31,1,2,4,4,4,4],'8':[14,17,17,14,17,17,14],
+      '9':[14,17,17,15,1,2,12],
+      '°':[7,5,7,0,0,0,0],'%':[25,26,2,4,8,11,19],'-':[0,0,0,31,0,0,0],
+      '.':[0,0,0,0,0,3,3],',':[0,0,0,0,3,1,2],'/':[1,1,2,4,8,16,16],
+      ':':[0,3,3,0,3,3,0],'•':[0,0,7,7,7,0,0],"'":[1,1,0,0,0,0,0],
+      '"':[5,5,0,0,0,0,0],'!':[1,1,1,1,1,0,1],'?':[14,17,1,2,4,0,4],
+      '&':[12,18,20,8,21,18,13],'+':[0,4,4,31,4,4,0],'(':[1,2,2,2,2,2,1],
+      ')':[2,1,1,1,1,1,2],'^':[4,10,17,0,0,0,0],'=':[0,0,31,0,31,0,0],
+      '$':[4,15,20,14,5,30,4],' ':[0,0,0,0,0,0,0],
+    },
+  };
+  const glyphW = ch => FONT.widths[ch] !== undefined ? FONT.widths[ch] : 5;
+
+  function measureText(str, scale = 1) {
+    let w = 0;
+    for (const ch of str.toUpperCase()) w += (glyphW(ch) + 1) * scale;
+    return w - scale; // no trailing gap
+  }
+
+  const OUTLINE8 = [[-1,-1],[0,-1],[1,-1],[-1,0],[1,0],[-1,1],[0,1],[1,1]];
+
+  // Draws text at (x, y); returns the x for the next character.
+  function drawText(str, x, y, color, scale = 1) {
+    x = Math.round(x); // fractional indices are silent no-ops on a Uint16Array
+    for (const ch of str.toUpperCase()) {
+      const gw = glyphW(ch);
+      if (x < FBW && x + (gw + 1) * scale > -scale) { // skip chars fully off-screen
+        const glyph = FONT.glyphs[ch] || FONT.glyphs[' '];
+        for (let row = 0; row < FONT.h; row++) {
+          for (let col = 0; col < gw; col++) {
+            if (glyph[row] & (1 << (gw - 1 - col)))
+              rect(x + col * scale, y + row * scale, scale, scale, color);
+          }
+        }
+      }
+      x += (gw + 1) * scale;
+    }
+    return x;
+  }
+
+  // Replace characters the font can't draw
+  function sanitize(str) {
+    return [...str.toUpperCase()].map(ch => FONT.glyphs[ch] ? ch : ' ').join('');
+  }
+
+  // ---------------------------------------------------------------
+  // Pixel-art weather icons (drawn inside a 26x26 box at top-left 3,3)
+  // Cross-hatched shading; each icon takes a 4 Hz beat counter and
+  // animates subtly.
+  // ---------------------------------------------------------------
+  const hatch = (x, y) => (x + y) & 1;
+
+  function drawSun(cx, cy, r, frame) {
+    const r2 = r * r + r * 0.5;
+    const rim = (r - 1.6) ** 2, core = (r - 2.8) ** 2;
+    for (let y = cy - r; y <= cy + r; y++) {
+      for (let x = cx - r; x <= cx + r; x++) {
+        const dx = x - cx, dy = y - cy, d2 = dx * dx + dy * dy;
+        if (d2 > r2) continue;
+        let c = '#ffd400';
+        if (d2 > rim && hatch(x, y)) c = '#f28c00';                            // hatched hot rim
+        else if (d2 < core && dx < 0 && dy < 0 && hatch(x, y)) c = '#fff3ae';  // upper-left glint
+        px(x, y, c);
+      }
+    }
+    // rays breathe: outer pixel appears every other second
+    const ext = (frame >> 2) & 1;
+    const dirs = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+    for (const [dx, dy] of dirs) {
+      const f = (dx && dy) ? 0.72 : 1; // pull diagonal rays in
+      for (let k = r + 2; k <= r + 2 + ext; k++) {
+        px(cx + Math.round(dx * k * f), cy + Math.round(dy * k * f), '#ffd400');
+      }
+    }
+  }
+
+  function drawCloud(ox, oy, pal, dx = 0) {
+    const inC = (x, y) => {
+      const d = (cx, cy, r) => (x - cx) ** 2 + (y - cy) ** 2 <= r * r + r * 0.5;
+      return d(5, 9, 4) || d(11, 6, 5) || d(17, 9, 4) || (x >= 2 && x <= 21 && y >= 9 && y <= 13);
+    };
+    for (let y = 0; y <= 15; y++) {
+      for (let x = 0; x <= 23; x++) {
+        if (!inC(x, y)) continue;
+        let c = pal.base;
+        if (!inC(x, y - 1)) c = pal.hi;               // lit top rim
+        else if (!inC(x, y + 1)) c = pal.shade;       // dark under-edge
+        else if (y >= 8 && hatch(x, y)) c = pal.mid;  // cross-hatched belly
+        px(ox + x + dx, oy + y, c);
+      }
+    }
+  }
+
+  const WHITE_CLOUD = { hi: '#ffffff', base: '#dfe6ee', mid: '#b7c2cd', shade: '#8f9aa6' };
+  const GREY_CLOUD  = { hi: '#cfd6de', base: '#aab4be', mid: '#8a95a0', shade: '#67717c' };
+
+  // slow 1px side-to-side drift (one step every 4s)
+  const drift = f => [0, 1, 1, 0][(f >> 4) & 3];
+
+  function drops(frame, color) {
+    [8, 13, 18].forEach((x, i) => {          // near layer: 2px streaks
+      const y = 18 + ((frame + i * 4) % 11);
+      px(x, y, color);
+      if (y < 29) px(x, y + 1, color);
+    });
+    [10, 15, 20].forEach((x, i) => {         // far layer: single pixels
+      const y = 18 + ((frame + 6 + i * 3) % 11);
+      px(x, y, color);
+    });
+  }
+
+  const ICONS = {
+    sun(f)    { drawSun(15, 16, 6, f); },
+    partly(f) { drawSun(10, 10, 4, f); drawCloud(5, 11, WHITE_CLOUD, drift(f)); },
+    cloud(f)  { drawCloud(4, 8, WHITE_CLOUD, drift(f)); },
+    fog(f) {
+      drawCloud(3, 2, GREY_CLOUD);
+      [20, 23, 26].forEach((y, i) => {       // fog banks slide back and forth
+        const sh = [0, 1, 2, 1][((f >> 3) + i) & 3];
+        rect(4 + sh, y, 18, 1, '#8f99a3');
+      });
+    },
+    rain(f) { drawCloud(4, 3, WHITE_CLOUD); drops(f, '#55aaff'); },
+    snow(f) {
+      drawCloud(4, 3, WHITE_CLOUD);
+      [8, 13, 18, 11, 16, 21].forEach((x, i) => {  // drifting flakes
+        const y = 18 + (((f >> 1) + i * 5) % 11);
+        const wob = ((f >> 3) + i) & 1;
+        px(x + wob, y, '#ffffff');
+      });
+    },
+    storm(f) {
+      drawCloud(3, 2, GREY_CLOUD);
+      const c = (f & 15) === 0 ? '#ffffff' : '#ffe000';  // periodic flash
+      [[1,0],[0,1],[1,1],[1,2],[1,3],[2,3],[2,4],[1,5]]
+        .forEach(([x, y]) => px(11 + x * 2, 17 + y * 2, c));
+    },
+  };
+
+  // Tiny 10px-wide icon set (day-parts + 5-day forecast columns)
+  const miniCloud = (ox, oy, base, shade) => {
+    rect(ox + 3, oy, 4, 1, base);
+    rect(ox + 1, oy + 1, 8, 1, base);
+    rect(ox, oy + 2, 10, 1, base);
+    rect(ox, oy + 3, 10, 1, shade);
+  };
+  const miniSun = (cx, cy, r) => {
+    for (let dy = -r; dy <= r; dy++)
+      for (let dx = -r; dx <= r; dx++)
+        if (dx * dx + dy * dy <= r * r + 1) px(cx + dx, cy + dy, '#ffd400');
+    [[r + 2, 0], [-r - 2, 0], [0, r + 2], [0, -r - 2]].forEach(([dx, dy]) =>
+      px(cx + dx, cy + dy, '#ffd400'));
+  };
+  const MINI_ICONS = {
+    sun(ox, oy)    { miniSun(ox + 5, oy + 5, 3); },
+    partly(ox, oy) { miniSun(ox + 3, oy + 2, 2); miniCloud(ox, oy + 5, '#dfe6ee', '#8f9aa6'); },
+    cloud(ox, oy)  { miniCloud(ox, oy + 3, '#dfe6ee', '#8f9aa6'); },
+    fog(ox, oy)    { [2, 5, 8].forEach((y, i) => rect(ox + (i & 1), oy + y, 9, 1, '#8f99a3')); },
+    rain(ox, oy) {
+      miniCloud(ox, oy + 1, '#dfe6ee', '#8f9aa6');
+      [[2, 6], [5, 8], [8, 6]].forEach(([x, y]) => { px(ox + x, oy + y, '#55aaff'); px(ox + x, oy + y + 1, '#55aaff'); });
+    },
+    snow(ox, oy) {
+      miniCloud(ox, oy + 1, '#dfe6ee', '#8f9aa6');
+      [[2, 6], [5, 8], [8, 6]].forEach(([x, y]) => px(ox + x, oy + y, '#ffffff'));
+    },
+    storm(ox, oy) {
+      miniCloud(ox, oy + 1, '#aab4be', '#67717c');
+      [[5, 5], [4, 6], [5, 7], [4, 8]].forEach(([x, y]) => px(ox + x, oy + y, '#ffe000'));
+    },
+  };
+
+  // WMO weather codes -> label + icon
+  function describe(code) {
+    if (code === 0) return ['CLEAR', 'sun'];
+    if (code === 1) return ['MAINLY CLEAR', 'partly'];
+    if (code === 2) return ['PARTLY CLOUDY', 'partly'];
+    if (code === 3) return ['OVERCAST', 'cloud'];
+    if (code === 45 || code === 48) return ['FOG', 'fog'];
+    if (code >= 51 && code <= 57) return ['DRIZZLE', 'rain'];
+    if (code >= 61 && code <= 67) return ['RAIN', 'rain'];
+    if (code >= 71 && code <= 77) return ['SNOW', 'snow'];
+    if (code >= 80 && code <= 82) return ['SHOWERS', 'rain'];
+    if (code === 85 || code === 86) return ['SNOW SHOWERS', 'snow'];
+    if (code >= 95) return ['THUNDERSTORM', 'storm'];
+    return ['UNKNOWN', 'cloud'];
+  }
+
+  const COMPASS = ['N','NNE','NE','ENE','E','ESE','SE','SSE',
+                   'S','SSW','SW','WSW','W','WNW','NW','NNW'];
+  const DAYS = ['SUNDAY','MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY'];
+  const MONTHS = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+
+  // ---------------------------------------------------------------
+  // Weather data: ZIP -> coordinates via zippopotam.us, then live
+  // conditions from Open-Meteo; embedded snapshot as fallback
+  // ---------------------------------------------------------------
+  let place = { lat: 39.3548, lon: -84.3102, name: 'Mason, OH',
+                state: 'OH', stateName: 'Ohio' }; // ZIP 45040 default
+
+  const weatherApi = () =>
+    `https://api.open-meteo.com/v1/forecast?latitude=${place.lat}&longitude=${place.lon}` +
+    '&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m' +
+    '&daily=temperature_2m_max,temperature_2m_min,sunrise,sunset,weather_code,precipitation_probability_max' +
+    '&hourly=temperature_2m,weather_code,precipitation_probability' +
+    '&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=auto&forecast_days=7';
+
+  // Snapshot from 2026-08-06 10:45 EDT (Mason/Maineville OH area)
+  const WEATHER_FALLBACK = {
+    utc_offset_seconds: -14400,
+    current: {
+      time: '2026-08-06T10:45',
+      temperature_2m: 79.7,
+      relative_humidity_2m: 77,
+      apparent_temperature: 87.8,
+      weather_code: 1,
+      wind_speed_10m: 3.4,
+      wind_direction_10m: 157,
+    },
+    daily: {
+      temperature_2m_max: [90.5, 88.1, 84.4, 79.9, 82.6, 85.2, 87.0],
+      temperature_2m_min: [67.3, 69.0, 66.2, 62.8, 61.5, 63.9, 65.5],
+      weather_code: [1, 2, 95, 61, 3, 0, 2],
+      precipitation_probability_max: [20, 35, 85, 70, 30, 5, 15],
+      sunrise: ['2026-08-06T06:45', '2026-08-07T06:46'],
+      sunset:  ['2026-08-06T20:44', '2026-08-07T20:42'],
+    },
+    // synthetic 48h hourly forecast so the day-parts channel works offline
+    hourly: (() => {
+      const temperature_2m = [], weather_code = [], precipitation_probability = [];
+      for (let i = 0; i < 48; i++) {
+        const h = i % 24;
+        temperature_2m.push(Math.round(78 + 12 * Math.sin((h - 9) / 24 * 2 * Math.PI)));
+        weather_code.push(h >= 14 && h <= 16 ? 61 : h >= 17 && h <= 18 ? 95 : h >= 11 ? 2 : 1);
+        precipitation_probability.push(h >= 14 && h <= 18 ? 70 : h >= 11 ? 25 : 5);
+      }
+      return { temperature_2m, weather_code, precipitation_probability };
+    })(),
+  };
+
+  let weatherData = null;
+  let locTzOffsetSec = null; // the ZIP's UTC offset, from Open-Meteo
+
+  // A Date whose local getters read the ZIP's wall-clock time, so the
+  // clock and displayed times follow the location, not the browser.
+  function toLoc(d) {
+    return locTzOffsetSec == null ? new Date(d)
+      : new Date(d.getTime() + locTzOffsetSec * 1000 + new Date().getTimezoneOffset() * 60000);
+  }
+  const locNow = () => toLoc(new Date());
+
+  function setStatus(data, live) {
+    const t = new Date(data.current.time);
+    const timeStr = t.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    statusEl.textContent =
+      `weather for ${place.name}: ${live ? 'live' : 'cached snapshot'} · observed ${timeStr} · open-meteo.com`;
+  }
+
+  async function refreshWeather() {
+    try {
+      const res = await fetch(weatherApi());
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      weatherData = await res.json();
+      if (weatherData.utc_offset_seconds != null) locTzOffsetSec = weatherData.utc_offset_seconds;
+      setStatus(weatherData, true);
+    } catch (err) {
+      console.log('weather fetch failed, using embedded snapshot:', err.message);
+      weatherData = WEATHER_FALLBACK;
+      locTzOffsetSec = WEATHER_FALLBACK.utc_offset_seconds;
+      setStatus(WEATHER_FALLBACK, false);
+    }
+  }
+
+  // Look up a US ZIP's coordinates, then pull that location's weather
+  async function setLocation(zip) {
+    try {
+      const res = await fetch(`https://api.zippopotam.us/us/${zip}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const geo = await res.json();
+      const p = geo.places[0];
+      place = { lat: +p.latitude, lon: +p.longitude,
+                name: `${p['place name']}, ${p['state abbreviation']} ${zip}`,
+                state: p['state abbreviation'], stateName: p.state };
+    } catch (err) {
+      console.log(`zip ${zip} lookup failed, keeping ${place.name}:`, err.message);
+    }
+    refreshWeather();
+    if (typeof refreshRadar === 'function') refreshRadar(); // radar follows the location
+    if (typeof computeIssPass === 'function') computeIssPass(); // pass prediction too
+    if (typeof refreshGas === 'function') refreshGas();     // state average follows too
+    if (typeof refreshAir === 'function') refreshAir();     // air traffic recenters too
+  }
+
+  // ---------------------------------------------------------------
+  // Headlines: Hacker News top stories (CORS-friendly, no key),
+  // embedded sample as fallback
+  // ---------------------------------------------------------------
+  const NEWS_FALLBACK = [
+    'TICKR ONLINE - LIVE HEADLINE FEED UNAVAILABLE, SHOWING SAMPLE TEXT',
+    'VIRTUAL 192X32 LED DISPLAY NOW SUPPORTS CHANNELS AND TRANSITIONS',
+    'LOCAL DEVELOPER REPORTS TICKER PROJECT "COMING ALONG NICELY"',
+  ];
+  let headlineText = sanitize(NEWS_FALLBACK.join('  •  '));
+
+  async function refreshNews() {
+    try {
+      const ids = await (await fetch('https://hacker-news.firebaseio.com/v0/topstories.json')).json();
+      const items = await Promise.all(ids.slice(0, 8).map(id =>
+        fetch(`https://hacker-news.firebaseio.com/v0/item/${id}.json`).then(r => r.json())));
+      const titles = items.filter(Boolean).map(i => i.title).filter(Boolean);
+      if (titles.length) headlineText = sanitize(titles.join('  •  '));
+    } catch (err) {
+      console.log('news fetch failed, using embedded sample:', err.message);
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // Stock quotes: Yahoo Finance via our Vercel proxy (same-origin,
+  // then deployed URL for local viewing, then a public CORS proxy),
+  // deterministic sample data as last resort
+  // ---------------------------------------------------------------
+  const DEPLOY_BASE = 'https://tickr-travis-westboldcoms-projects.vercel.app';
+  let stockData = null;
+
+  function sampleStock(symbol) {
+    const closes = Array.from({ length: 60 }, (_, i) =>
+      100 + 3 * Math.sin(i / 7) + i * 0.04 + 1.2 * Math.sin(i / 2.3));
+    return { symbol, closes, price: closes[closes.length - 1],
+             prevClose: 99.4, state: 'SAMPLE', live: false };
+  }
+
+  async function refreshStock() {
+    const symbol = cfg.symbol;
+    const yahoo = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=5m&range=1d`;
+    const sources = [
+      `/api/quote?symbol=${encodeURIComponent(symbol)}`,
+      `${DEPLOY_BASE}/api/quote?symbol=${encodeURIComponent(symbol)}`,
+      `https://corsproxy.io/?url=${encodeURIComponent(yahoo)}`,
+    ];
+    for (const url of sources) {
+      try {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = await r.json();
+        const res0 = j.chart && j.chart.result && j.chart.result[0];
+        if (!res0) throw new Error('no result');
+        const closes = (res0.indicators.quote[0].close || []).filter(v => v != null);
+        if (!closes.length) throw new Error('no closes');
+        const meta = res0.meta || {};
+        stockData = {
+          symbol: meta.symbol || symbol,
+          closes,
+          price: meta.regularMarketPrice != null ? meta.regularMarketPrice : closes[closes.length - 1],
+          prevClose: meta.chartPreviousClose != null ? meta.chartPreviousClose : closes[0],
+          state: meta.marketState || '',
+          live: true,
+        };
+        return;
+      } catch (err) { console.log(`stock source failed (${url.slice(0, 40)}…):`, err.message); }
+    }
+    stockData = sampleStock(symbol);
+  }
+
+  // ---------------------------------------------------------------
+  // Weather radar: RainViewer tiles (free, CORS-open), sampled into
+  // a 48x8 grid of 4x4-px cells centered on the weather location.
+  // Loads the last few frames for a TV-style motion loop.
+  // ---------------------------------------------------------------
+  let radarData = null;
+  const RADAR_Z = 7;
+  // display window: 1.25 km/px wide, 2.5 km/px tall (240 x 80 km strip)
+  const RADAR_KMX = 1.25, RADAR_KMY = 2.5;
+
+  // classic NWS reflectivity ladder, 5 dBZ steps from 5 to 70+
+  const NWS_DBZ = ['#04e9e7', '#019ff4', '#0300f4', '#02fd02', '#01c501', '#008e00',
+                   '#fdf802', '#e5bc00', '#fd9500', '#fd0000', '#d40000', '#bc0000',
+                   '#f800fd', '#9854c6'];
+
+  function sampleRadar() {
+    const pal565 = NWS_DBZ.map(to565);
+    const frames = [];
+    for (let fi = 0; fi < 4; fi++) {
+      const buf = new Uint16Array(NPIX);
+      // blobs: [x km, y km, size km, peak dBZ], drifting east each frame
+      const blobs = [[-62 + fi * 5, 6, 26, 48], [28 + fi * 5, -8, 18, 64], [-12 + fi * 5, 14, 32, 36]];
+      for (let y = 0; y < FBH; y++) {
+        const ky = (y - 16) * RADAR_KMY;
+        for (let x = 0; x < FBW; x++) {
+          const kx = (x - 96) * RADAR_KMX;
+          let dbz = 0;
+          for (const [bx, by, sz, pk] of blobs) {
+            const d2 = (kx - bx) ** 2 + (ky - by) ** 2;
+            dbz = Math.max(dbz, pk * Math.exp(-d2 / (2 * sz * sz)));
+          }
+          dbz += 3 * Math.sin(kx / 6 + ky / 4 + fi); // ragged edges
+          if (dbz >= 5) buf[y * FBW + x] = pal565[Math.min(13, Math.floor((dbz - 5) / 5))];
+        }
+      }
+      frames.push(buf);
+    }
+    return { frames, live: false };
+  }
+
+  async function refreshRadar() {
+    try {
+      if (typeof Image === 'undefined') throw new Error('no DOM');
+      const wm = await (await fetch('https://api.rainviewer.com/public/weather-maps.json')).json();
+      const past = wm.radar.past.slice(-4); // last ~20 minutes
+      // world-pixel window around the weather location (web mercator)
+      const T = 256, scale = T * 2 ** RADAR_Z;
+      const wx = (place.lon + 180) / 360 * scale;
+      const s = Math.sin(place.lat * Math.PI / 180);
+      const wy = (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * scale;
+      const mpp = 156543.03 * Math.cos(place.lat * Math.PI / 180) / 2 ** RADAR_Z; // meters/px
+      const pxW = RADAR_KMX * 1000 / mpp, pxH = RADAR_KMY * 1000 / mpp;
+      const x0 = wx - FBW / 2 * pxW, y0 = wy - FBH / 2 * pxH;
+      const tx0 = Math.floor(x0 / T), tx1 = Math.floor((x0 + FBW * pxW) / T);
+      const ty0 = Math.floor(y0 / T), ty1 = Math.floor((y0 + FBH * pxH) / T);
+
+      const frames = await Promise.all(past.map(async fr => {
+        const cnv = document.createElement('canvas');
+        cnv.width = (tx1 - tx0 + 1) * T;
+        cnv.height = (ty1 - ty0 + 1) * T;
+        const c2 = cnv.getContext('2d');
+        await Promise.all([].concat(...Array.from({ length: ty1 - ty0 + 1 }, (_, j) =>
+          Array.from({ length: tx1 - tx0 + 1 }, (_, i) => new Promise(resolve => {
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = () => { c2.drawImage(img, i * T, j * T); resolve(); };
+            img.onerror = resolve; // missing tile = no echoes there
+            // color scheme 6 = NEXRAD Level 3, no smoothing, show snow
+            img.src = `${wm.host}${fr.path}/256/${RADAR_Z}/${tx0 + i}/${ty0 + j}/6/0_1.png`;
+          })))));
+        const d = c2.getImageData(0, 0, cnv.width, cnv.height).data;
+        const buf = new Uint16Array(NPIX);
+        for (let py = 0; py < FBH; py++)
+          for (let qx = 0; qx < FBW; qx++) {
+            const sx = Math.round(x0 + (qx + 0.5) * pxW - tx0 * T);
+            const sy = Math.round(y0 + (py + 0.5) * pxH - ty0 * T);
+            const k = (sy * cnv.width + sx) * 4;
+            if (d[k + 3] > 60) buf[py * FBW + qx] = rgb565(d[k], d[k + 1], d[k + 2]);
+          }
+        return buf;
+      }));
+      radarData = { frames, live: true };
+    } catch (err) {
+      console.log('radar fetch failed, using sample:', err.message);
+      radarData = sampleRadar();
+    }
+  }
+
+  // rough echo severity from an RGB565 radar pixel
+  function radarSeverity(v) {
+    const r = (v >> 11 & 31) << 3, g = (v >> 5 & 63) << 2, b = (v & 31) << 3;
+    if (r > 150 && b > 150) return 4;                    // magenta — extreme
+    if (r > 170 && g < 110) return 4;                    // red — severe
+    if (r > 200 && g > 100 && g < 210 && b < 100) return 3; // orange — heavy
+    if (r > 200 && g > 200 && b < 130) return 2.5;       // yellow — strong
+    if (g > 110 && r < 110 && b < 110) return 1.5;       // green — rain
+    return 0.75;                                         // cyan/blue — light
+  }
+
+  // ---------------------------------------------------------------
+  // ISS tracker: two position samples from wheretheiss.at give us a
+  // circular-orbit model (inclination 51.64°, period from altitude);
+  // we propagate it locally for smooth live lat/lon and scan ahead
+  // to predict the next pass over the weather location.
+  // ---------------------------------------------------------------
+  let issData = null, issPass = null, astroCount = null, astroLive = false;
+  const DEG = Math.PI / 180, ISS_INC = 51.6438;
+
+  function issPosAt(ms) {
+    const M = issData.model;
+    const t = (ms - M.t0) / 60000; // minutes since epoch sample
+    const u = (M.u0 + M.n * t) * DEG;
+    const lat = Math.asin(Math.sin(ISS_INC * DEG) * Math.sin(u)) / DEG;
+    let lon = M.lonAn0 - 0.250684 * t - 0.00347 * t + // earth rotation + nodal drift
+              Math.atan2(Math.sin(u) * Math.cos(ISS_INC * DEG), Math.cos(u)) / DEG;
+    lon = ((lon + 540) % 360) - 180;
+    return { lat, lon };
+  }
+
+  function havKm(lat1, lon1, lat2, lon2) {
+    const a = Math.sin((lat2 - lat1) * DEG / 2) ** 2 +
+      Math.cos(lat1 * DEG) * Math.cos(lat2 * DEG) * Math.sin((lon2 - lon1) * DEG / 2) ** 2;
+    return 12742 * Math.asin(Math.sqrt(a));
+  }
+
+  // first time in the next 36h the ISS footprint covers the location
+  function computeIssPass() {
+    if (!issData) return;
+    const start = Date.now();
+    issPass = null;
+    for (let dt = 0; dt <= 36 * 60; dt += 0.5) {
+      const p = issPosAt(start + dt * 60000);
+      if (havKm(p.lat, p.lon, place.lat, place.lon) < 1200) {
+        issPass = new Date(start + dt * 60000);
+        return;
+      }
+    }
+  }
+
+  async function refreshISS() {
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const r = await fetch(`https://api.wheretheiss.at/v1/satellites/25544/positions?timestamps=${now},${now + 120}&units=kilometers`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const [p0, p1] = await r.json();
+      const a = 6371 + p0.altitude;
+      const n = 360 / (2 * Math.PI * Math.sqrt(a ** 3 / 398600.4418) / 60); // deg/min
+      const su = Math.max(-1, Math.min(1, Math.sin(p0.latitude * DEG) / Math.sin(ISS_INC * DEG)));
+      const u0 = (p1.latitude > p0.latitude ? Math.asin(su) : Math.PI - Math.asin(su)) / DEG;
+      const lonAn0 = p0.longitude -
+        Math.atan2(Math.sin(u0 * DEG) * Math.cos(ISS_INC * DEG), Math.cos(u0 * DEG)) / DEG;
+      issData = { model: { t0: p0.timestamp * 1000, u0, lonAn0, n }, alt: p0.altitude, live: true };
+    } catch (err) {
+      console.log('ISS fetch failed, using sample orbit:', err.message);
+      issData = { model: { t0: Date.now(), u0: 35, lonAn0: -100, n: 360 / 92.9 }, alt: 420, live: false };
+    }
+    computeIssPass();
+  }
+
+  async function refreshAstros() {
+    for (const url of ['/api/astros', `${DEPLOY_BASE}/api/astros`, 'http://api.open-notify.org/astros.json']) {
+      try {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = await r.json();
+        if (typeof j.number !== 'number') throw new Error('no count');
+        astroCount = j.number;
+        astroLive = true;
+        return;
+      } catch (err) { console.log(`astros source failed (${url.slice(0, 40)}):`, err.message); }
+    }
+    astroCount = 12; // rough figure when every source is unreachable
+    astroLive = false;
+  }
+
+  // ---------------------------------------------------------------
+  // Next rocket launch: The Space Devs Launch Library (free, CORS-open)
+  // ---------------------------------------------------------------
+  let launchData = null;
+
+  async function refreshLaunch() {
+    try {
+      const r = await fetch('https://ll.thespacedevs.com/2.2.0/launch/upcoming/?limit=6&mode=list');
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      // first launch not yet 30 min past liftoff
+      const pick = j.results.find(l => new Date(l.net) > new Date(Date.now() - 30 * 60000));
+      if (!pick) throw new Error('no upcoming launch');
+      const parts = pick.name.split('|');
+      launchData = {
+        vehicle: parts[0].trim(),
+        mission: (parts[1] || parts[0]).trim(),
+        provider: pick.lsp_name || '',
+        net: new Date(pick.net),
+        status: (pick.status && pick.status.abbrev) || '',
+        live: true,
+      };
+    } catch (err) {
+      console.log('launch fetch failed, using sample:', err.message);
+      launchData = {
+        vehicle: 'Falcon 9', mission: 'STARLINK GROUP 17-38', provider: 'SpaceX',
+        net: new Date(Date.now() + (45 * 3600 + 754) * 1000), status: 'Go', live: false,
+      };
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // Live air traffic: OpenSky Network states around the weather
+  // location, via our /api/air proxy. Between syncs every aircraft is
+  // dead-reckoned from its velocity + heading, so the planes fly
+  // smoothly across the display in real time.
+  // ---------------------------------------------------------------
+  let airData = null;
+
+  function sampleAir() {
+    const now = Date.now() / 1000;
+    const mk = (cs, kx, ky, alt, vel, trk) => ({
+      cs, alt, vel, trk, vr: 0, t: now, sample: true,
+      lat: place.lat + ky / 110.57,
+      lon: place.lon + kx / (111.32 * Math.cos(place.lat * DEG)),
+    });
+    return { planes: [
+      mk('DAL1249', -55, 14, 10600, 245, 105), mk('AAL415', 30, -10, 10100, 230, 240),
+      mk('SWA903', -20, -20, 3400, 160, 60),   mk('N547TB', 15, 8, 1100, 55, 300),
+      mk('UPS2874', 60, 18, 7300, 210, 200),   mk('N91AF', -70, -6, 800, 45, 20),
+    ], live: false };
+  }
+
+  async function refreshAir() {
+    const dLat = 0.45, dLon = 0.75;
+    const qs = `lamin=${(place.lat - dLat).toFixed(3)}&lomin=${(place.lon - dLon).toFixed(3)}` +
+               `&lamax=${(place.lat + dLat).toFixed(3)}&lomax=${(place.lon + dLon).toFixed(3)}`;
+    for (const url of [`/api/air?${qs}`, `${DEPLOY_BASE}/api/air?${qs}`]) {
+      try {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = await r.json();
+        const planes = (j.states || [])
+          .filter(s => !s[8] && s[5] != null && s[6] != null)
+          .map(s => ({
+            cs: (s[1] || '').trim() || String(s[0]).toUpperCase(),
+            lon: s[5], lat: s[6], alt: s[7] || 0, vel: s[9] || 0,
+            trk: s[10] || 0, vr: s[11] || 0, t: s[3] || j.time,
+          }));
+        airData = { planes, live: true };
+        return;
+      } catch (err) { console.log(`air source failed (${url.slice(0, 30)}):`, err.message); }
+    }
+    airData = sampleAir();
+  }
+
+  // ---------------------------------------------------------------
+  // Gas prices: AAA state averages via our /api/gas scraper proxy
+  // ---------------------------------------------------------------
+  let gasData = null;
+
+  async function refreshGas() {
+    const state = place.state || 'OH';
+    for (const url of [`/api/gas?state=${state}`, `${DEPLOY_BASE}/api/gas?state=${state}`]) {
+      try {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = await r.json();
+        if (!j.regular) throw new Error('no data');
+        gasData = { ...j, stateName: place.stateName || j.state, live: true };
+        return;
+      } catch (err) { console.log(`gas source failed (${url.slice(0, 30)}):`, err.message); }
+    }
+    gasData = { regular: 3.99, mid: 4.55, premium: 5.08, diesel: 5.26,
+                weekAgo: 3.90, stateName: place.stateName || 'Ohio', live: false };
+  }
+
+  // ---------------------------------------------------------------
+  // Bitcoin: Coinbase 24h stats (CORS-open, no key), CoinGecko backup
+  // ---------------------------------------------------------------
+  let btcData = null;
+
+  async function refreshBTC() {
+    try {
+      const r = await fetch('https://api.exchange.coinbase.com/products/BTC-USD/stats');
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      const last = +j.last, open = +j.open;
+      btcData = { price: last, chg: (last - open) / open * 100,
+                  high: +j.high, low: +j.low, live: true };
+      return;
+    } catch (err) { console.log('coinbase failed:', err.message); }
+    try {
+      const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true');
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      btcData = { price: j.bitcoin.usd, chg: j.bitcoin.usd_24h_change,
+                  high: null, low: null, live: true };
+      return;
+    } catch (err) { console.log('coingecko failed:', err.message); }
+    btcData = { price: 64381, chg: -0.64, high: 64989, low: 64087, live: false };
+  }
+
+  // ---------------------------------------------------------------
+  // Real sports: ESPN scoreboards across the major US leagues.
+  // Off-season leagues return no events and drop out on their own.
+  // ---------------------------------------------------------------
+  let sportsGames = null;
+  const SPORT_LEAGUES = [
+    ['baseball/mlb', 'MLB', '#002d72'],
+    ['football/nfl', 'NFL', '#013369'],
+    ['basketball/nba', 'NBA', '#c8102e'],
+    ['hockey/nhl', 'NHL', '#4a4a4a'],
+    ['soccer/usa.1', 'MLS', '#1a6b3c'],
+  ];
+
+  async function refreshSports() {
+    const games = [];
+    for (const [path, lg, lcolor] of SPORT_LEAGUES) {
+      try {
+        const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/${path}/scoreboard`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = await r.json();
+        for (const e of j.events || []) {
+          const comp = e.competitions && e.competitions[0];
+          if (!comp) continue;
+          const side = ha => {
+            const c = comp.competitors.find(x => x.homeAway === ha) || {};
+            return { ab: (c.team && c.team.abbreviation) || '???',
+                     color: `#${(c.team && c.team.color) || '444444'}`,
+                     score: c.score != null ? +c.score : null };
+          };
+          games.push({
+            lg, lcolor,
+            away: side('away'), home: side('home'),
+            state: (e.status && e.status.type && e.status.type.state) || 'pre',
+            detail: (e.status && e.status.type && e.status.type.shortDetail) || '',
+            date: new Date(e.date),
+            live: true,
+          });
+        }
+      } catch (err) { console.log(`sports ${lg} failed:`, err.message); }
+    }
+    // live first, then upcoming by start time, then finals
+    const rank = { in: 0, pre: 1, post: 2 };
+    games.sort((a, b) => (rank[a.state] - rank[b.state]) || (a.date - b.date));
+    sportsGames = games.length ? games.slice(0, 12) : [
+      { lg: 'MLB', lcolor: '#002d72', away: { ab: 'ATH', color: '#003831', score: 5 },
+        home: { ab: 'CIN', color: '#c6011f', score: 6 }, state: 'in', detail: 'BOT 7TH',
+        date: new Date(), live: false },
+      { lg: 'NFL', lcolor: '#013369', away: { ab: 'CAR', color: '#0085ca', score: null },
+        home: { ab: 'ARI', color: '#a40227', score: null }, state: 'pre', detail: '',
+        date: new Date(Date.now() + 3.5 * 3600000), live: false },
+      { lg: 'MLS', lcolor: '#1a6b3c', away: { ab: 'HOU', color: '#ff6b00', score: 1 },
+        home: { ab: 'NE', color: '#022166', score: 2 }, state: 'post', detail: 'FT',
+        date: new Date(Date.now() - 5 * 3600000), live: false },
+    ];
+  }
+
+  // ---------------------------------------------------------------
+  // Motorsport: next event per series from ESPN's public scoreboard
+  // API (CORS-open, no key) — F1, NASCAR Cup, IndyCar
+  // ---------------------------------------------------------------
+  let motorEvents = null;
+  const MOTOR_LEAGUES = [
+    ['f1', 'F1', '#e10600'],
+    ['nascar-premier', 'NASCAR', '#ffd659'],
+    ['irl', 'INDYCAR', '#c8102e'],
+  ];
+
+  async function refreshMotor() {
+    const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
+    const range = `${fmt(new Date())}-${fmt(new Date(Date.now() + 70 * 86400000))}`;
+    const found = [];
+    for (const [league, series, color] of MOTOR_LEAGUES) {
+      try {
+        const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/racing/${league}/scoreboard?dates=${range}`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = await r.json();
+        // first event not long finished (races linger ~4h for LIVE/finish states)
+        const e = (j.events || []).find(ev => new Date(ev.date) > new Date(Date.now() - 4 * 3600000));
+        if (!e) continue;
+        found.push({
+          series, color,
+          name: e.name || '',
+          venue: (e.circuit && e.circuit.fullName) ||
+                 (e.competitions && e.competitions[0] && e.competitions[0].venue && e.competitions[0].venue.fullName) || '',
+          date: new Date(e.date),
+          state: (e.status && e.status.type && e.status.type.state) || 'pre',
+          live: true,
+        });
+      } catch (err) { console.log(`motorsport ${league} failed:`, err.message); }
+    }
+    motorEvents = found.length ? found : [
+      { series: 'F1', color: '#e10600', name: 'DUTCH GRAND PRIX', venue: 'CIRCUIT ZANDVOORT',
+        date: new Date(Date.now() + 15 * 86400000), state: 'pre', live: false },
+      { series: 'NASCAR', color: '#ffd659', name: 'CUP SERIES AT IOWA', venue: 'IOWA SPEEDWAY',
+        date: new Date(Date.now() + 3 * 86400000), state: 'pre', live: false },
+      { series: 'INDYCAR', color: '#c8102e', name: 'GRAND PRIX OF PORTLAND', venue: 'PORTLAND RACEWAY',
+        date: new Date(Date.now() + 3.1 * 86400000), state: 'pre', live: false },
+    ];
+  }
+
+  // ---------------------------------------------------------------
+  // eSports tournament data. DEMO matches (times are relative so the
+  // countdowns stay meaningful) — swap in real fixtures here, or feed
+  // it from an API with a key (e.g. PandaScore) later.
+  // ---------------------------------------------------------------
+  const TOURNAMENT = {
+    name: 'ESPORTS WORLD CUP', game: 'CS2', demo: true,
+    matches: [
+      { a: 'NAVI', ca: '#b89010', b: 'SPIRIT', cb: '#2266cc',
+        live: true, scoreA: 1, scoreB: 1, note: 'MAP 3 • MIRAGE',
+        time: new Date(Date.now() - 40 * 60000) },
+      { a: 'VITALITY', ca: '#c8a000', b: 'MOUZ', cb: '#cc2222',
+        stage: 'SEMIFINAL', time: new Date(Date.now() + 2.4 * 3600000) },
+      { a: 'G2', ca: '#aa2222', b: 'FALCONS', cb: '#2e8b57',
+        stage: 'SEMIFINAL', time: new Date(Date.now() + 5.5 * 3600000) },
+      { a: 'LIQUID', ca: '#1c5aa8', b: 'FAZE', cb: '#cc2222',
+        scoreA: 0, scoreB: 2, note: 'QUARTERFINAL',
+        time: new Date(Date.now() - 5 * 3600000) },
+    ],
+  };
+
+  // ---------------------------------------------------------------
+  // The Moon, 27x27 in 12 shades — pixelized (with dithering) from a
+  // real full-moon photograph, so the maria pattern is the actual
+  // near side: Imbrium/Procellarum upper left, Serenitatis and
+  // Tranquillitatis right of center, bright Tycho highlands south.
+  // Chars index the shade palettes (base 12), '.' = outside the disc.
+  // ---------------------------------------------------------------
+  const MOON_MAP = [
+    '...........68888...........',
+    '........23566656798........',
+    '......111353223465577......',
+    '.....10122110122485548.....',
+    '....202311211123367755a....',
+    '...200231111122245655669...',
+    '..30001112222235442234477..',
+    '..30001224432225631213679..',
+    '.5300034257653455212127998.',
+    '.5200023346442221332127888.',
+    '.4100011244221451253123676.',
+    '442000022242224665511114924',
+    '44310113224456369a511103714',
+    '444333021242687889621112645',
+    '465343123233567998a72533465',
+    '367520243221576899a64752044',
+    '.55730223113878889a8585113.',
+    '.44653433213877788b8366135.',
+    '.34444447668a9998797266354.',
+    '..53466689bbba98899755535..',
+    '..3444668abbba99988777553..',
+    '...443568aaab99887778974...',
+    '....55568aaaa9887877996....',
+    '.....67689999877887675.....',
+    '......577a88878787652......',
+    '........58998877642........',
+    '...........56554...........',
+  ];
+  const MOON_LIT  = ['#282827','#3c3c3a','#4f4f4d','#636360','#767673','#8a8a86',
+                     '#9d9d99','#b1b1ac','#c4c4be','#d8d8d1','#ebebe4','#fffff7'];
+  const MOON_DIM  = ['#121213','#1b1b1d','#242426','#2c2c2f','#353539','#3e3e42',
+                     '#47474b','#505055','#58585e','#616168','#6a6a71','#73737a'];
+  const MOON_DARK = ['#0b0d16','#0c0f18','#0e101a','#0f121c','#10131e','#121520',
+                     '#131722','#141824','#161a26','#171b28','#181d2a','#1a1e2c'];
+
+  // ---------------------------------------------------------------
+  // Earth, 25x25 in 16 colors — pixelized (with dithering) from the
+  // NASA Blue Marble western-hemisphere composite: blue oceans, white
+  // cloud systems, tan/olive North America. Chars index the palettes
+  // (base 16), '.' = outside the disc.
+  // ---------------------------------------------------------------
+  const EARTH_MAP = [
+    '..........ccccc..........',
+    '.......c9955999bbc.......',
+    '.....c95311225999bbd.....',
+    '....b3112252225999bbc....',
+    '...9331102255259999bbc...',
+    '..b1111102502989955abbd..',
+    '..83330112002779599bbbb..',
+    '.a68831312247772279aabbc.',
+    '.88831000047775257baabbc.',
+    '.66810105474777720595bbb.',
+    'a63300039444777200259bbbc',
+    '86810101022444424959babbc',
+    '8686100000044759bbaaaaabc',
+    '86888001022747abbaaaa9abc',
+    '81688388102547aaaaaa93abc',
+    '.00688a85225775209aa99ab.',
+    '.61666888599aa992295599b.',
+    '.866861333aa9aaa955225bc.',
+    '..66666333881183332215b..',
+    '..9686688333333331259bc..',
+    '...366688888333101299b...',
+    '....3666666611110135b....',
+    '.....91363311131113b.....',
+    '.......8663666313a.......',
+    '..........9888a..........',
+  ];
+  const EARTH_PAL  = ['#c1c8ee','#909deb','#98a0ac','#6876de','#a5904c','#657397',
+                      '#465df4','#5c6c34','#394acd','#404e87','#1a2684','#16215d',
+                      '#0e1432','#040718','#010103','#000000'];
+  const EARTH_DARK = ['#4d5482','#394181','#3c435e','#29317a','#423c29','#283053',
+                      '#1c2786','#242d1c','#161f70','#19204a','#0a0f48','#080d33',
+                      '#05081b','#01020d','#000001','#000000'];
+
+  // ---------------------------------------------------------------
+  // Sky gradients for the sunrise/sunset channel. Four color stages
+  // (sun below horizon -> high) x four bands (horizon -> zenith),
+  // bilinearly interpolated so the sky shifts smoothly as the sun
+  // moves. Values are [r,g,b].
+  // ---------------------------------------------------------------
+  const hex2rgb = c => [parseInt(c.slice(1, 3), 16), parseInt(c.slice(3, 5), 16), parseInt(c.slice(5, 7), 16)];
+  const SKY_DAWN = [
+    ['#3a1a4e', '#241238', '#140c26', '#0a0616'],   // pre-dawn night
+    ['#ff7a2a', '#c04058', '#5a2a6a', '#1c1440'],   // sun on the horizon
+    ['#ffb050', '#ff7a50', '#8a4a8a', '#2c2260'],   // low sun
+    ['#ffd88a', '#ffa060', '#7a6ab8', '#3a4a90'],   // climbing into morning
+  ].map(st => st.map(hex2rgb));
+  const SKY_DUSK = [
+    ['#2a1030', '#1c0c24', '#100818', '#080410'],   // after dark
+    ['#ff5a30', '#c02848', '#601c58', '#180f38'],   // last light
+    ['#ff9a40', '#e05848', '#7a3a78', '#241a50'],   // low sun
+    ['#ffc870', '#ff8a50', '#8a5a9a', '#32306e'],   // golden hour
+  ].map(st => st.map(hex2rgb));
+  const rgb565 = (r, g, b) => ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+  function skyColor(SKY, e, rowT) {
+    const s = Math.min(0.999, Math.max(0, e)) * 3, si = Math.floor(s), st = s - si;
+    const b = Math.min(0.999, rowT) * 3, bi = Math.floor(b), bt = b - bi;
+    const ch = k => {
+      const lo = SKY[si][bi][k] * (1 - bt) + SKY[si][bi + 1][k] * bt;
+      const hi = SKY[si + 1][bi][k] * (1 - bt) + SKY[si + 1][bi + 1][k] * bt;
+      return (lo * (1 - st) + hi * st) | 0;
+    };
+    return rgb565(ch(0), ch(1), ch(2));
+  }
+  const mix565 = (a, b, t) =>
+    rgb565((a[0] + (b[0] - a[0]) * t) | 0, (a[1] + (b[1] - a[1]) * t) | 0, (a[2] + (b[2] - a[2]) * t) | 0);
+
+  // ---------------------------------------------------------------
+  // Channels — each renders one frame into the current target buffer.
+  // `f` is the channel-local frame count (20 fps) since it was shown.
+  // ---------------------------------------------------------------
+  const FPS = 20;
+  let globalFrame = 0;
+
+  const channels = [
+    {
+      id: 'weather', name: 'Weather',
+      render(f) {
+        if (!weatherData) {
+          drawText('LOADING WEATHER', (FBW - measureText('LOADING WEATHER')) / 2, 12, '#8f99a3');
+          return;
+        }
+        const cur = weatherData.current;
+        const [label, iconName] = describe(cur.weather_code);
+        ICONS[iconName](Math.floor(globalFrame / 5)); // icons pace at their 4 Hz beat
+
+        drawText(`${Math.round(cur.temperature_2m)}°`, 34, 9, '#ffffff', 2);
+
+        const rx = 82;
+        drawText(label, rx, 1, '#ffffff');
+        let x = drawText(`HI ${Math.round(weatherData.daily.temperature_2m_max[0])}°`, rx, 9, '#ff9e9e');
+        drawText(`LO ${Math.round(weatherData.daily.temperature_2m_min[0])}°`, x + 4, 9, '#9ecbff');
+        drawText(`FEELS ${Math.round(cur.apparent_temperature)}°`, rx, 17, '#ffd27a');
+        x = drawText(`WIND ${Math.round(cur.wind_speed_10m)} ${COMPASS[Math.round(cur.wind_direction_10m / 22.5) % 16]}`, rx, 25, '#9ef0a0');
+        drawText(`HUM ${cur.relative_humidity_2m}%`, x + 6, 25, '#c9c9c9');
+      },
+    },
+    {
+      id: 'today', name: 'Day Parts',
+      render(f) {
+        if (!weatherData || !weatherData.hourly) {
+          drawText('LOADING FORECAST', (FBW - measureText('LOADING FORECAST')) / 2, 12, '#8f99a3');
+          return;
+        }
+        const H = weatherData.hourly;
+        // hourly arrays start at local midnight today; tonight rolls into tomorrow
+        const PARTS = [
+          ['MORN',    [6, 7, 8, 9, 10]],
+          ['MIDDAY',  [11, 12, 13]],
+          ['AFTNOON', [14, 15, 16]],
+          ['EVE',     [17, 18, 19, 20]],
+          ['TONIGHT', [21, 22, 23, 24, 25, 26, 27, 28, 29]],
+        ];
+        const h = locNow().getHours(); // day part at the ZIP, not the browser
+        const cur = h < 6 ? 4 : h < 11 ? 0 : h < 14 ? 1 : h < 17 ? 2 : h < 21 ? 3 : 4;
+
+        PARTS.forEach(([label, hours], i) => {
+          const xi = Math.round(i * FBW / 5);
+          const w = Math.round((i + 1) * FBW / 5) - xi;
+          if (i === cur) { // highlight the part of day we're in
+            rect(xi, 0, w, FBH, '#101a26');
+            rect(xi, 31, w, 1, '#ffd27a');
+          }
+          const temps = hours.map(k => H.temperature_2m[k]).filter(v => v != null);
+          const t = Math.round(temps.reduce((a, b) => a + b, 0) / (temps.length || 1));
+          const code = Math.max(...hours.map(k => H.weather_code[k] || 0)); // worst case
+          const pp = Math.max(...hours.map(k => H.precipitation_probability[k] || 0));
+
+          const ctr = (str, y, color) =>
+            drawText(str, Math.max(0, Math.min(FBW - measureText(str), xi + (w - measureText(str)) / 2)), y, color);
+          ctr(label, 0, i === cur ? '#ffe000' : '#8f99a3');
+          MINI_ICONS[describe(code)[1]](xi + Math.round((w - 10) / 2), 8);
+          ctr(`${t}°`, 18, '#ffffff');
+          if (pp >= 20) ctr(`${pp}%`, 25, '#55aaff');
+        });
+      },
+    },
+    {
+      id: 'forecast', name: '5-Day',
+      render() {
+        if (!weatherData || !weatherData.daily.weather_code) {
+          drawText('LOADING FORECAST', (FBW - measureText('LOADING FORECAST')) / 2, 12, '#8f99a3');
+          return;
+        }
+        const D = weatherData.daily;
+        const today = locNow().getDay();
+        for (let i = 0; i < 5; i++) {
+          const xi = Math.round(i * FBW / 5);
+          const w = Math.round((i + 1) * FBW / 5) - xi;
+          if (i === 0) { // today, gently marked
+            rect(xi, 0, w, FBH, '#101a26');
+            rect(xi, 31, w, 1, '#ffd27a');
+          }
+          const ctr = (str, y, color) =>
+            drawText(str, Math.max(0, Math.min(FBW - measureText(str), xi + (w - measureText(str)) / 2)), y, color);
+          ctr(i === 0 ? 'TODAY' : DAYS[(today + i) % 7].slice(0, 3), 0, i === 0 ? '#ffe000' : '#8f99a3');
+          MINI_ICONS[describe(D.weather_code[i] || 0)[1]](xi + Math.round((w - 10) / 2), 8);
+          ctr(`${Math.round(D.temperature_2m_max[i])}°`, 18, '#ffffff');
+          ctr(`${Math.round(D.temperature_2m_min[i])}°`, 25, '#9ecbff');
+        }
+      },
+    },
+    {
+      id: 'clock', name: 'Clock',
+      render() {
+        const now = locNow(); // the ZIP's wall clock
+        const s = now.getSeconds();
+        let h = now.getHours();
+        const ampm = h >= 12 ? 'PM' : 'AM';
+        h = h % 12 || 12;
+        const mm = String(now.getMinutes()).padStart(2, '0');
+        // colon blinks each second: drawn black (invisible) on odd seconds
+        let x = 68 - measureText(`${h}:${mm}`, 2);
+        x = drawText(`${h}`, x, 8, '#ffffff', 2);
+        x = drawText(':', x, 8, s % 2 ? '#000' : '#ffffff', 2);
+        drawText(mm, x, 8, '#ffffff', 2);
+
+        // seconds bar: one pixel per second
+        rect(8, 26, 60, 2, '#243040');
+        rect(8, 26, s + 1, 2, '#55aaff');
+
+        const rx = 84;
+        drawText(DAYS[now.getDay()], rx, 2, '#ffffff');
+        drawText(`${MONTHS[now.getMonth()]} ${now.getDate()} ${now.getFullYear()}`, rx, 11, '#9ecbff');
+        const ax = drawText(ampm, rx, 20, '#ffd27a');
+        drawText(`:${String(s).padStart(2, '0')}`, ax + 2, 20, '#c9c9c9');
+      },
+    },
+    {
+      id: 'headlines', name: 'Headlines', resume: true,
+      render(f) {
+        rect(0, 0, 28, 11, '#cc2222');
+        drawText('NEWS', 2, 2, '#ffffff');
+        drawText('HACKER NEWS', 33, 2, '#8f99a3');
+        const now = locNow();
+        const h12 = now.getHours() % 12 || 12;
+        const clock = `${h12}:${String(now.getMinutes()).padStart(2, '0')} ${now.getHours() >= 12 ? 'PM' : 'AM'}`;
+        drawText(clock, FBW - measureText(clock) - 2, 2, '#8f99a3');
+        rect(0, 11, FBW, 1, '#39424c');
+
+        // marquee: 2 px per frame, restarts off the right edge each showing
+        const textW = measureText(headlineText, 2);
+        const xoff = FBW - ((f * 2) % (textW + FBW));
+        drawText(headlineText, xoff, 15, '#ffffff', 2);
+      },
+    },
+    {
+      id: 'moon', name: 'Moon',
+      render(f) {
+        const SYNODIC = 29.530588853;
+        const EPOCH = Date.UTC(2000, 0, 6, 18, 14); // a known new moon
+        const age = (((Date.now() - EPOCH) / 86400000) % SYNODIC + SYNODIC) % SYNODIC;
+        const p = age / SYNODIC; // 0 = new, 0.5 = full
+        const illum = Math.round((1 - Math.cos(2 * Math.PI * p)) / 2 * 100);
+
+        // starfield, a few twinkle on a slow beat
+        const STARS = [[38,4],[58,27],[74,29],[96,28],[118,29],[140,29],[168,28],
+                       [186,12],[46,29],[181,3]];
+        STARS.forEach(([x, y], i) => {
+          px(x, y, ((f >> 3) + i * 3) % 5 === 0 ? '#8892a8' : '#3a4150');
+        });
+
+        // the real near side: photo-derived shade map, terminator from
+        // the phase angle; night side shows faint blue earthshine
+        const cx = 16, cy = 16, r = 13;
+        const t = Math.cos(2 * Math.PI * p);
+        for (let my = 0; my < 27; my++)
+          for (let mx = 0; mx < 27; mx++) {
+            const ch = MOON_MAP[my][mx];
+            if (ch === '.') continue;
+            const idx = parseInt(ch, 12);
+            const dx = mx - 13, dy = my - 13;
+            const w = Math.sqrt(Math.max(0.001, r * r - dy * dy)); // row half-width
+            const db = p <= 0.5 ? dx - t * w : -t * w - dx; // signed dist into lit side
+            const X = cx + dx, Y = cy + dy;
+            const pal = db < 0 ? MOON_DARK
+                      : (db < 1.5 && hatch(X, Y)) ? MOON_DIM // dithered terminator
+                      : MOON_LIT;
+            px(X, Y, pal[idx]);
+          }
+
+        const names = [[0.02,'NEW MOON'],[0.23,'WAXING CRESCENT'],[0.27,'FIRST QUARTER'],
+                       [0.48,'WAXING GIBBOUS'],[0.52,'FULL MOON'],[0.73,'WANING GIBBOUS'],
+                       [0.77,'LAST QUARTER'],[0.98,'WANING CRESCENT'],[1.01,'NEW MOON']];
+        const name = names.find(([lim]) => p < lim)[1];
+
+        const rx = 40;
+        drawText(name, rx, 1, '#ffffff');
+        drawText(`${illum}% ILLUMINATED`, rx, 9, '#ffd27a');
+        drawText(`AGE ${age.toFixed(1)} DAYS`, rx, 17, '#9ecbff');
+        const dFull = ((0.5 - p + 1) % 1) * SYNODIC;
+        const dNew = ((1 - p) % 1) * SYNODIC;
+        drawText(dFull <= dNew ? `FULL MOON IN ${Math.ceil(dFull)}D`
+                               : `NEW MOON IN ${Math.ceil(dNew)}D`, rx, 25, '#c9c9c9');
+      },
+    },
+    {
+      id: 'sun', name: 'Sunrise',
+      render(f) {
+        // animated horizon scenes: the sun climbs (left) and sinks
+        // (right) on a 12s loop while the sky gradient shifts with it
+        const scene = (x0, x1, cx, phase, SKY, sun, g) => {
+          const sinN = Math.sin(phase), e = (sinN + 1) / 2; // elevation 0..1
+          for (let y = 0; y <= 23; y++) {                   // shifting sky
+            const v = skyColor(SKY, e, (23 - y) / 23);
+            for (let x = x0; x <= x1; x++) pset(x, y, v);
+          }
+          // stars twinkle in the night sky, fading out as the sun climbs
+          const fade = Math.max(0, (0.38 - e) / 0.38);
+          if (fade > 0) {
+            const STARS = [[3,2],[8,6],[13,1],[18,4],[24,2],[28,7],[6,12],[21,10],[15,8],[27,14],[11,16]];
+            STARS.forEach(([sx, sy2], i) => {
+              const tw = (Math.floor(f / 4) + i * 3) % 7;   // per-star twinkle beat
+              let g = (60 + 180 * fade) * (tw === 0 ? 1.3 : tw < 3 ? 1 : 0.55);
+              g = Math.min(255, g | 0);
+              const x = x0 > 100 ? x1 - sx : x0 + sx;       // mirror pattern on the dusk panel
+              pset(x, sy2, rgb565(g, g, Math.min(255, (g * 1.08) | 0)));
+            });
+          }
+          // layered sun: hot core, body, hatched rim, glow halo
+          const sy = 25 - Math.round(9 * sinN), r = 5;
+          for (let dy = -r - 2; dy <= r + 2; dy++) {
+            const Y = sy + dy;
+            if (Y < 0 || Y > 23) continue;                  // clips below horizon
+            for (let dx = -r - 2; dx <= r + 2; dx++) {
+              const X = cx + dx;
+              if (X < x0 || X > x1) continue;
+              const d2 = dx * dx + dy * dy;
+              if (d2 <= 4) px(X, Y, sun[0]);
+              else if (d2 <= 13) px(X, Y, sun[1]);
+              else if (d2 <= r * r + r * 0.5) px(X, Y, hatch(X, Y) ? sun[2] : sun[1]);
+              else if (d2 <= (r + 2.5) ** 2 && hatch(X, Y)) px(X, Y, sun[3]);
+            }
+          }
+          // horizon + ground catch the light as the sun rises
+          const hv = mix565(g.hd, g.hl, e), gv1 = mix565(g.d1, g.l1, e), gv2 = mix565(g.d2, g.l2, e);
+          for (let x = x0; x <= x1; x++) pset(x, 24, hv);
+          for (let y = 25; y <= 30; y++)
+            for (let x = x0; x <= x1; x++) pset(x, y, hatch(x, y) ? gv1 : gv2);
+        };
+
+        const w = 2 * Math.PI * (f % (12 * FPS)) / (12 * FPS);
+        scene(1, 31, 16, -Math.PI / 2 + w, SKY_DAWN,          // starts below, rising
+          ['#fff8d8', '#ffd400', '#ff9020', '#ff8038'],
+          { d1: [10,16,10], l1: [32,56,28], d2: [6,10,7], l2: [22,40,20], hd: [24,36,22], hl: [70,110,60] });
+        scene(160, 190, 175, Math.PI / 2 + w, SKY_DUSK,       // starts high, setting
+          ['#ffe8c0', '#ff9020', '#e04818', '#d84028'],
+          { d1: [16,9,22], l1: [46,32,48], d2: [10,6,15], l2: [32,22,36], hd: [30,20,36], hl: [90,60,80] });
+
+        if (!weatherData || !weatherData.daily.sunrise) {
+          drawText('LOADING SUN DATA', (FBW - measureText('LOADING SUN DATA')) / 2, 12, '#8f99a3');
+          return;
+        }
+        // API times are the location's wall clock, so compare in kind
+        const now = locNow();
+        const next = list => list.map(s => new Date(s)).find(d => d > now)
+          || new Date(new Date(list[0]).getTime() + 86400000);
+        const nextSR = next(weatherData.daily.sunrise);
+        const nextSS = next(weatherData.daily.sunset);
+
+        const fmtTime = d => {
+          let h = d.getHours();
+          const ap = h >= 12 ? 'PM' : 'AM';
+          h = h % 12 || 12;
+          return `${h}:${String(d.getMinutes()).padStart(2, '0')} ${ap}`;
+        };
+        const fmtIn = d => {
+          const mTot = Math.max(0, Math.round((d - now) / 60000));
+          const h = Math.floor(mTot / 60), m = mTot % 60;
+          return h ? `IN ${h}H ${m}M` : `IN ${m}M`;
+        };
+        const srSooner = nextSR <= nextSS;
+
+        drawText('SUNRISE', 35, 3, '#ffd400');
+        drawText(fmtTime(nextSR), 35, 12, '#ffffff');
+        drawText(fmtIn(nextSR), 35, 21, srSooner ? '#9ef0a0' : '#8f99a3');
+
+        const rr = 156; // right column, right-aligned
+        drawText('SUNSET', rr - measureText('SUNSET'), 3, '#ff8c30');
+        drawText(fmtTime(nextSS), rr - measureText(fmtTime(nextSS)), 12, '#ffffff');
+        drawText(fmtIn(nextSS), rr - measureText(fmtIn(nextSS)), 21, srSooner ? '#8f99a3' : '#9ef0a0');
+      },
+    },
+    {
+      id: 'stocks', name: 'Stocks',
+      render(f) {
+        if (!stockData) {
+          drawText('LOADING QUOTES', (FBW - measureText('LOADING QUOTES')) / 2, 12, '#8f99a3');
+          return;
+        }
+        const { symbol, closes, price, prevClose, state, live } = stockData;
+        const up = price >= prevClose;
+        const col = up ? '#2ecc40' : '#ff4136';
+        const beat = Math.floor(f / 5);
+
+        // header: symbol + market-state dot, price right-aligned
+        const INDEX_NAMES = { '^GSPC': 'S&P 500', '^DJI': 'DOW', '^IXIC': 'NASDAQ' };
+        const sx = drawText(INDEX_NAMES[symbol] || symbol, 2, 2, '#ffffff', 2);
+        rect(sx + 2, 4, 3, 3, state === 'REGULAR' ? ((beat & 3) ? '#2ecc40' : '#116622') : '#5a5a5a');
+        const ptxt = price >= 10000 ? price.toFixed(0) : price.toFixed(2);
+        drawText(ptxt, 190 - measureText(ptxt, 2), 2, '#ffffff', 2);
+
+        // intraday sparkline, prev-close baseline, hatched area fill
+        const cx0 = 2, cx1 = 118, cy0 = 17, cy1 = 30;
+        const vmin = Math.min(...closes, prevClose), vmax = Math.max(...closes, prevClose);
+        const span = vmax - vmin || 1;
+        const Y = v => cy1 - Math.round((v - vmin) / span * (cy1 - cy0));
+        const fill = up ? '#0e3317' : '#38100c';
+        let prevY = 0;
+        for (let x = cx0; x <= cx1; x++) {
+          const t = (x - cx0) / (cx1 - cx0) * (closes.length - 1);
+          const i0 = Math.floor(t), fr = t - i0;
+          const v = closes[i0] * (1 - fr) + closes[Math.min(i0 + 1, closes.length - 1)] * fr;
+          const y = Y(v);
+          if (x === cx0) px(x, y, col);
+          else for (let yy = Math.min(y, prevY); yy <= Math.max(y, prevY); yy++) px(x, yy, col);
+          for (let yy = y + 1; yy <= cy1; yy++) if (hatch(x, yy)) px(x, yy, fill);
+          prevY = y;
+        }
+        const lineV = to565(col);
+        const by = Y(prevClose);
+        for (let x = cx0; x <= cx1; x += 3)          // dotted baseline, skipping the line itself
+          if (target[by * FBW + x] !== lineV) px(x, by, '#4a5560');
+        rect(cx1 - 1, prevY - 1, 3, 3, (beat & 1) ? col : '#ffffff'); // pulsing last price
+
+        // change in $ and %, right-aligned
+        const chg = price - prevClose;
+        const pct = prevClose ? chg / prevClose * 100 : 0;
+        const sign = chg >= 0 ? '+' : '-';
+        const s1 = `${sign}${Math.abs(chg) >= 100 ? Math.abs(chg).toFixed(0) : Math.abs(chg).toFixed(2)}`;
+        const s2 = `${sign}${Math.abs(pct).toFixed(2)}%`;
+        drawText(s1, 190 - measureText(s1), 16, col);
+        drawText(s2, 190 - measureText(s2), 25, col);
+        if (!live) drawText('SAMPLE', 4, 19, '#5a6a75');
+      },
+    },
+    {
+      id: 'radar', name: 'Radar',
+      render(f) {
+        if (!radarData) {
+          drawText('LOADING RADAR', (FBW - measureText('LOADING RADAR')) / 2, 12, '#8f99a3');
+          return;
+        }
+        const { frames, live } = radarData;
+        // motion loop: step through past frames, hold on the latest
+        const STEP = 8, HOLD = 30;
+        const cycle = (frames.length - 1) * STEP + HOLD;
+        const idx = Math.min(Math.floor((f % cycle) / STEP), frames.length - 1);
+        const buf = frames[idx];
+
+        // dark field with dotted range rings at 30 and 60 km
+        rect(0, 0, FBW, FBH, '#060b09');
+        for (const [rr, steps] of [[30, 48], [60, 80]]) {
+          const rx = rr / RADAR_KMX, ry = rr / RADAR_KMY;
+          for (let k = 0; k < steps; k += 2)
+            px(96 + Math.round(rx * Math.cos(k / steps * 2 * Math.PI)),
+               16 + Math.round(ry * Math.sin(k / steps * 2 * Math.PI)), '#14231d');
+        }
+        // per-pixel echoes straight into the framebuffer
+        for (let i = 0; i < NPIX; i++) if (buf[i]) target[i] = buf[i];
+
+        // location crosshair, dead center
+        rect(92, 14, 9, 5, '#000'); rect(94, 12, 5, 9, '#000');
+        rect(93, 15, 7, 3, '#fff'); rect(95, 13, 3, 7, '#fff');
+
+        // corner overlays, sample-style
+        const city = place.name.split(',').map(p => p.trim());
+        drawText(`${city[0]} ${(city[1] || '').split(' ')[0]}`.trim(), 1, 1, '#ffffff');
+        if (weatherData) {
+          const [label] = describe(weatherData.current.weather_code);
+          const wtxt = `${label} ${Math.round(weatherData.current.temperature_2m)}°`;
+          drawText(wtxt, 190 - measureText(wtxt), 1, '#ffffff');
+        }
+
+        // situation banner from echo severity near the crosshair
+        let centerSev = 0, areaSev = 0;
+        for (let i = 0; i < NPIX; i++) {
+          if (!buf[i]) continue;
+          const sv = radarSeverity(buf[i]);
+          areaSev = Math.max(areaSev, sv);
+          const cx = i % FBW, cy = (i / FBW) | 0;
+          if (cx >= 84 && cx <= 108 && cy >= 10 && cy <= 22) centerSev = Math.max(centerSev, sv);
+        }
+        const banner =
+          centerSev >= 3 ? 'STORM OVERHEAD' :
+          centerSev >= 1 ? 'PRECIP OVERHEAD' :
+          areaSev >= 3 ? 'STORMS IN AREA' :
+          areaSev >= 1 ? 'RAIN IN AREA' : '';
+        if (banner) drawText(banner, 1, 24, '#ffe000');
+        if (!live) drawText('SAMPLE', 2, 13, '#5a6a75');
+
+        // clock, bottom-right, sample-style compact
+        const now = locNow();
+        const h12 = now.getHours() % 12 || 12;
+        const ttxt = `${h12}:${String(now.getMinutes()).padStart(2, '0')}${now.getHours() >= 12 ? 'P' : 'A'}`;
+        drawText(ttxt, 190 - measureText(ttxt), 24, '#c9c9c9');
+      },
+    },
+    {
+      id: 'esports', name: 'eSports', resume: true,
+      render(f) {
+        const T = TOURNAMENT;
+        const beat = Math.floor(f / 5);
+
+        // header: gold trophy + tournament name, game tag right
+        const TROPHY = [127, 127, 62, 28, 8, 28, 62];
+        for (let r = 0; r < 7; r++)
+          for (let c = 0; c < 7; c++)
+            if (TROPHY[r] & (64 >> c)) px(2 + c, 1 + r, hatch(c, r) ? '#f28c00' : '#ffd400');
+        drawText(T.name, 12, 1, '#ffd400');
+        drawText(T.game, 190 - measureText(T.game), 1, '#8f99a3');
+        rect(0, 9, FBW, 1, '#39424c');
+
+        // rotate through the match list, ~6s per card
+        const m = T.matches[Math.floor(f / (6 * FPS)) % T.matches.length];
+        const now = new Date();
+        const mt = new Date(m.time);
+        const done = m.scoreA != null && !m.live && mt < now;
+
+        // team tag blocks in team colors
+        const wA = measureText(m.a) + 9, wB = measureText(m.b) + 9;
+        rect(3, 12, wA, 11, m.ca);
+        drawText(m.a, 8, 14, '#ffffff');
+        rect(189 - wB, 12, wB, 11, m.cb);
+        drawText(m.b, 194 - wB, 14, '#ffffff');
+
+        // center: score for live/finished, VS for upcoming
+        const mid = m.scoreA != null ? `${m.scoreA}-${m.scoreB}` : 'VS';
+        drawText(mid, (FBW - measureText(mid, 2)) / 2, 11, '#ffffff', 2);
+
+        // status line, centered: LIVE blink / FINAL / stage + countdown
+        const segs = [];
+        if (m.live) {
+          segs.push(['LIVE', (beat & 1) ? '#ff4136' : '#8a1010']);
+          segs.push([` • ${m.note}`, '#c9c9c9']);
+        } else if (done) {
+          segs.push(['FINAL', '#8f99a3']);
+          segs.push([` • ${m.note}`, '#c9c9c9']);
+        } else {
+          const h12 = mt.getHours() % 12 || 12;
+          const clock = `${h12}:${String(mt.getMinutes()).padStart(2, '0')} ${mt.getHours() >= 12 ? 'PM' : 'AM'}`;
+          const mins = Math.max(0, Math.round((mt - now) / 60000));
+          const cd = mins >= 60 ? `IN ${Math.floor(mins / 60)}H ${mins % 60}M` : `IN ${mins}M`;
+          segs.push([m.stage || 'UPCOMING', '#ffe000']);
+          segs.push([` • ${clock} • ${cd}`, '#c9c9c9']);
+        }
+        let sx = (FBW - segs.reduce((w, s) => w + measureText(s[0]) + 1, 0)) / 2;
+        for (const [txt, c] of segs) sx = drawText(txt, sx, 25, c);
+        if (T.demo) drawText('DEMO', 190 - measureText('DEMO'), 25, '#5a6a75');
+      },
+    },
+    {
+      id: 'launch', name: 'Launch',
+      render(f) {
+        if (!launchData) {
+          drawText('LOADING LAUNCH', (FBW - measureText('LOADING LAUNCH')) / 2, 12, '#8f99a3');
+          return;
+        }
+        const { mission, provider, net, status, live } = launchData;
+        const beat = Math.floor(f / 5);
+
+        // provider logo, left (26x26 box at 2,3)
+        if (/spacex/i.test(provider)) {
+          // stylized X with the falcon swoosh
+          for (let k = -9; k <= 9; k++) {
+            px(15 + k, 16 + k, '#e8e8e8'); px(16 + k, 16 + k, '#e8e8e8');
+            px(15 + k, 16 - k, '#e8e8e8'); px(16 + k, 16 - k, '#e8e8e8');
+          }
+          [[26, 6], [27, 6], [28, 5], [29, 5]].forEach(([x, y]) => px(x, y, '#e8e8e8'));
+        } else if (/nasa/i.test(provider)) {
+          // the meatball: blue disc, stars, NASA, red swoosh
+          for (let dy = -13; dy <= 13; dy++)
+            for (let dx = -13; dx <= 13; dx++)
+              if (dx * dx + dy * dy <= 175) px(15 + dx, 16 + dy, '#0b3d91');
+          [[8, 8], [22, 11], [11, 25], [24, 22]].forEach(([x, y]) => px(x, y, '#ffffff'));
+          drawText('NASA', 4, 13, '#ffffff');
+          for (let x = 4; x <= 26; x++) {
+            const t = (x - 4) / 22;
+            px(x, Math.round(24 - 8 * t + 5 * t * t), '#e03c31');
+          }
+        } else {
+          // generic rocket with flickering flame
+          rect(13, 6, 5, 12, '#cfd6de');
+          [[15, 3], [14, 4], [15, 4], [16, 4]].forEach(([x, y]) => px(x, y, '#e04818'));
+          rect(13, 5, 5, 1, '#e04818');
+          rect(14, 9, 3, 2, '#1c5aa8');                       // window
+          rect(11, 15, 2, 4, '#e04818'); rect(18, 15, 2, 4, '#e04818'); // fins
+          const flame = 3 + (beat & 1) + ((beat >> 1) & 1);
+          for (let j = 0; j < flame; j++) {
+            px(15, 19 + j, j < 2 ? '#ffe000' : '#ff8c30');
+            if (j < flame - 1) { px(14, 19 + j, '#ff8c30'); px(16, 19 + j, '#ff8c30'); }
+          }
+        }
+
+        // mission name, truncated to fit
+        let mtxt = mission.toUpperCase();
+        while (mtxt.length && measureText(mtxt) > 150) mtxt = mtxt.slice(0, -1);
+        drawText(mtxt, 36, 1, '#ffffff');
+
+        // date • time • status (shown in the ZIP's timezone)
+        const dNet = toLoc(net);
+        const h12 = dNet.getHours() % 12 || 12;
+        const when = `${MONTHS[dNet.getMonth()]} ${dNet.getDate()} • ${h12}:${String(dNet.getMinutes()).padStart(2, '0')} ${dNet.getHours() >= 12 ? 'PM' : 'AM'}`;
+        let ix = 36;
+        if (!/spacex|nasa/i.test(provider) && provider)
+          ix = drawText(`${provider.split(' ')[0].toUpperCase()} • `, ix, 9, '#ffffff');
+        ix = drawText(when, ix, 9, '#9ecbff');
+        const statusCol = /go/i.test(status) ? '#2ecc40'
+          : /tb[cd]/i.test(status) ? '#ffe000'
+          : /hold/i.test(status) ? '#ff8c30' : '#8f99a3';
+        drawText(` • ${status.toUpperCase()}`, ix, 9, statusCol);
+
+        // the T-minus clock
+        const diff = net - new Date();
+        const sign = diff >= 0 ? 'T-' : 'T+';
+        const ad = Math.floor(Math.abs(diff) / 1000);
+        const d = Math.floor(ad / 86400), h = Math.floor(ad % 86400 / 3600),
+              m = Math.floor(ad % 3600 / 60), s = ad % 60;
+        const p2 = n => String(n).padStart(2, '0');
+        let tstr = d > 0 ? `${sign}${d}D ${p2(h)}:${p2(m)}:${p2(s)}` : `${sign}${p2(h)}:${p2(m)}:${p2(s)}`;
+        if (measureText(tstr, 2) > 154) tstr = `${sign}${d}D ${p2(h)}:${p2(m)}`; // very distant launches
+        drawText(tstr, 36, 17, diff >= 0 ? '#9ef0a0' : '#ff8c30', 2);
+        if (!live) drawText('SAMPLE', 190 - measureText('SAMPLE'), 25, '#5a6a75');
+      },
+    },
+    {
+      id: 'iss', name: 'ISS',
+      render(f) {
+        if (!issData) {
+          drawText('LOADING ISS', (FBW - measureText('LOADING ISS')) / 2, 12, '#8f99a3');
+          return;
+        }
+
+        // the Blue Marble: photo-derived color map, hatch-shaded limb
+        const ex = 14, ey = 16, er = 12;
+        for (let my = 0; my < 25; my++)
+          for (let mx = 0; mx < 25; mx++) {
+            const ch = EARTH_MAP[my][mx];
+            if (ch === '.') continue;
+            const idx = parseInt(ch, 16);
+            const dx = mx - 12, dy = my - 12;
+            const X = ex + dx, Y = ey + dy;
+            const shade = dx > er - 4 && hatch(X, Y); // night falls on the right limb
+            px(X, Y, (shade ? EARTH_DARK : EARTH_PAL)[idx]);
+          }
+
+        // dotted orbit ring + the ISS flying along it (one lap = 20s)
+        for (let k = 0; k < 48; k += 2)
+          px(ex + Math.round(16 * Math.cos(k / 48 * 2 * Math.PI)),
+             ey + Math.round(13 * Math.sin(k / 48 * 2 * Math.PI)), '#39424c');
+        const th = (f % 400) / 400 * 2 * Math.PI;
+        const ix = ex + Math.round(16 * Math.cos(th)), iy = ey + Math.round(13 * Math.sin(th));
+        rect(ix - 5, iy - 1, 3, 3, '#c8a018');  // port solar array
+        rect(ix + 3, iy - 1, 3, 3, '#c8a018');  // starboard solar array
+        rect(ix - 2, iy, 5, 1, '#8f99a3');      // truss
+        rect(ix - 1, iy - 1, 3, 3, '#e8e8e8');  // modules
+
+        // readouts
+        const tx = 36;
+        let hx = drawText('ISS TRACKER', tx, 1, '#ffffff');
+        if (!issData.live) drawText('SAMPLE', hx + 5, 1, '#5a6a75');
+        if (astroCount != null) {
+          const ppl = `${astroCount} IN SPACE`;
+          drawText(ppl, 190 - measureText(ppl), 1, '#ffd27a');
+        }
+
+        const p = issPosAt(Date.now());
+        drawText(`LAT ${p.lat.toFixed(1)}°  LON ${p.lon.toFixed(1)}°`, tx, 9, '#9ecbff');
+
+        if (issPass) {
+          const dp = toLoc(issPass); // shown in the ZIP's timezone
+          const h12 = dp.getHours() % 12 || 12;
+          const ptime = `${MONTHS[dp.getMonth()]} ${dp.getDate()} ${h12}:${String(dp.getMinutes()).padStart(2, '0')}${dp.getHours() >= 12 ? 'P' : 'A'}`;
+          drawText(`NEXT PASS ${ptime}`, tx, 17, '#ffffff');
+          const secs = Math.max(0, Math.floor((issPass - Date.now()) / 1000));
+          const ph = Math.floor(secs / 3600), pm = Math.floor(secs % 3600 / 60), ps = secs % 60;
+          const cd = ph > 0 ? `IN ${ph}H ${pm}M ${ps}S` : pm > 0 ? `IN ${pm}M ${ps}S` : `IN ${ps}S`;
+          drawText(cd, tx, 25, '#9ef0a0');
+        } else {
+          drawText('NO PASS IN 36H', tx, 17, '#8f99a3');
+        }
+        const alt = `ALT ${Math.round(issData.alt)} KM`;
+        drawText(alt, 190 - measureText(alt), 25, '#c9c9c9');
+      },
+    },
+    {
+      id: 'sports', name: 'Sports', resume: true,
+      render(f) {
+        if (!sportsGames) {
+          drawText('LOADING SCORES', (FBW - measureText('LOADING SCORES')) / 2, 12, '#8f99a3');
+          return;
+        }
+        const beat = Math.floor(f / 5);
+        const n = sportsGames.length;
+        const idx = Math.floor(f / (6 * FPS)) % n;
+        const g = sportsGames[idx];
+
+        // league badge + card position
+        const bw = measureText(g.lg) + 5;
+        rect(0, 0, bw, 11, g.lcolor);
+        drawText(g.lg, 3, 2, '#ffffff');
+        const pos = `${idx + 1} OF ${n}`;
+        drawText(pos, 190 - measureText(pos), 2, '#8f99a3');
+        if (!g.live) drawText('DEMO', (FBW - measureText('DEMO')) / 2, 2, '#5a6a75');
+
+        // away @ home in team colors
+        const wA = measureText(g.away.ab) + 9, wH = measureText(g.home.ab) + 9;
+        rect(3, 12, wA, 11, g.away.color);
+        drawText(g.away.ab, 8, 14, '#ffffff');
+        rect(189 - wH, 12, wH, 11, g.home.color);
+        drawText(g.home.ab, 194 - wH, 14, '#ffffff');
+        const mid = g.away.score != null && g.state !== 'pre'
+          ? `${g.away.score}-${g.home.score}` : 'AT';
+        drawText(mid, (FBW - measureText(mid, 2)) / 2, 11, '#ffffff', 2);
+
+        // status line
+        const segs = [];
+        if (g.state === 'in') {
+          segs.push(['LIVE', (beat & 1) ? '#ff4136' : '#8a1010']);
+          if (g.detail) segs.push([` • ${sanitize(g.detail.toUpperCase())}`, '#c9c9c9']);
+        } else if (g.state === 'post') {
+          segs.push([sanitize((g.detail || 'FINAL').toUpperCase()), '#8f99a3']);
+        } else {
+          const dt = toLoc(g.date);
+          const h12 = dt.getHours() % 12 || 12;
+          segs.push([`${h12}:${String(dt.getMinutes()).padStart(2, '0')} ${dt.getHours() >= 12 ? 'PM' : 'AM'}`, '#ffe000']);
+          const mins = Math.max(0, Math.round((g.date - Date.now()) / 60000));
+          segs.push([` • IN ${mins >= 60 ? `${Math.floor(mins / 60)}H ${mins % 60}M` : `${mins}M`}`, '#9ef0a0']);
+        }
+        let sx = (FBW - segs.reduce((w2, s) => w2 + measureText(s[0]) + 1, 0)) / 2;
+        for (const [txt, c] of segs) sx = drawText(txt, sx, 25, c);
+      },
+    },
+    {
+      id: 'motor', name: 'Motorsport', resume: true,
+      render(f) {
+        if (!motorEvents) {
+          drawText('LOADING RACES', (FBW - measureText('LOADING RACES')) / 2, 12, '#8f99a3');
+          return;
+        }
+        const beat = Math.floor(f / 5);
+        const ev = motorEvents[Math.floor(f / (6 * FPS)) % motorEvents.length];
+
+        // series logo, left (26x26 box)
+        if (ev.series === 'F1') {
+          // red F1 mark with streaking speed lines
+          drawText('F1', 6, 9, '#e10600', 2);
+          for (let i = 0; i < 3; i++) {
+            const y = 11 + i * 4, sh = (beat + i) % 3;
+            rect(0 + sh, y, 4 - sh, 2, '#e10600');
+          }
+        } else if (ev.series === 'NASCAR') {
+          // the striped bar
+          rect(1, 10, 27, 12, '#15151a');
+          ['#ffd659', '#e4002b', '#007ac2', '#6f2da8'].forEach((c, i) => {
+            for (let y = 11; y <= 20; y++)
+              rect(4 + i * 4 + Math.floor((20 - y) * 0.6), y, 2, 1, c);
+          });
+        } else {
+          // open-wheel car, wheels spinning, speed dashes behind
+          const cy = 12;
+          rect(2, cy, 3, 2, '#c8102e');                 // rear wing
+          rect(4, cy + 3, 17, 3, '#c8102e');            // body
+          px(21, cy + 4, '#c8102e'); px(22, cy + 4, '#c8102e'); // nose
+          rect(11, cy + 1, 4, 2, '#15151a');            // cockpit
+          rect(20, cy + 6, 6, 1, '#c8102e');            // front wing
+          const hub = [[1, 0], [0, 1], [-1, 0], [0, -1]][beat & 3]; // spinning hub pixel
+          for (const wx of [8, 18]) {                   // wheels
+            for (let dy = -2; dy <= 2; dy++)
+              for (let dx = -2; dx <= 2; dx++)
+                if (dx * dx + dy * dy <= 5) px(wx + dx, cy + 7 + dy, '#15151a');
+            px(wx + hub[0], cy + 7 + hub[1], '#8f99a3');
+          }
+          for (let i = 0; i < 2; i++)
+            rect((beat % 3), cy + 3 + i * 2, 2, 1, '#5a5a5a');
+        }
+
+        // event card
+        let name = ev.name.toUpperCase();
+        while (name.length && measureText(name) > 150) name = name.slice(0, -1);
+        drawText(name, 36, 1, '#ffffff');
+        let venue = (ev.venue || '').toUpperCase();
+        while (venue.length && measureText(venue) > 150) venue = venue.slice(0, -1);
+        drawText(venue, 36, 9, '#8f99a3');
+
+        const dt = toLoc(ev.date); // shown in the ZIP's timezone
+        const h12 = dt.getHours() % 12 || 12;
+        drawText(`${MONTHS[dt.getMonth()]} ${dt.getDate()} • ${h12}:${String(dt.getMinutes()).padStart(2, '0')} ${dt.getHours() >= 12 ? 'PM' : 'AM'}`,
+          36, 17, '#9ecbff');
+
+        if (ev.state === 'in') {
+          drawText('LIVE NOW', 36, 25, (beat & 1) ? '#ff4136' : '#8a1010');
+        } else if (ev.state === 'post') {
+          drawText('FINISHED', 36, 25, '#8f99a3');
+        } else {
+          const secs = Math.max(0, Math.floor((ev.date - Date.now()) / 1000)); // absolute
+          const dd = Math.floor(secs / 86400), hh = Math.floor(secs % 86400 / 3600),
+                mm = Math.floor(secs % 3600 / 60), ss = secs % 60;
+          const cd = dd > 0 ? `IN ${dd}D ${hh}H ${mm}M` : `IN ${hh}H ${mm}M ${ss}S`;
+          drawText(cd, 36, 25, '#9ef0a0');
+        }
+        const tag = ev.series + (ev.live ? '' : ' SAMPLE');
+        drawText(tag, 190 - measureText(tag), 25, ev.color);
+      },
+    },
+    {
+      id: 'btc', name: 'Bitcoin',
+      render(f) {
+        if (!btcData) {
+          drawText('LOADING BITCOIN', (FBW - measureText('LOADING BITCOIN')) / 2, 12, '#8f99a3');
+          return;
+        }
+        const { price, chg, high, low, live } = btcData;
+
+        // spinning coin: ellipse width follows cos(rot) for a 3D turn
+        const ex = 15, ey = 16, R = 12;
+        const rot = (f % 64) / 64 * 2 * Math.PI; // one turn every 3.2s
+        const cosR = Math.cos(rot), sinR = Math.sin(rot);
+        const rx = Math.max(2, R * Math.abs(cosR));
+        const front = cosR > 0;
+        const sheen = ((f % 64) / 64 * 2 - 1) * (rx + 4); // highlight sweeps across
+
+        // extruded, reeded edge — the coin's thickness trails the turn
+        const th = Math.round(4 * Math.abs(sinR));
+        const dir = sinR > 0 ? -1 : 1;
+        for (let o = th; o >= 1; o--) {
+          const c1 = o & 1 ? '#8a4d08' : '#b06a10'; // alternating ridges
+          for (let dy = -R; dy <= R; dy++)
+            for (let dx = -Math.ceil(rx); dx <= Math.ceil(rx); dx++) {
+              if ((dx * dx) / (rx * rx) + (dy * dy) / (R * R) > 1) continue;
+              px(ex + dir * o + dx, ey + dy, c1);
+            }
+        }
+
+        for (let dy = -R; dy <= R; dy++)
+          for (let dx = -Math.ceil(rx); dx <= Math.ceil(rx); dx++) {
+            const n = (dx * dx) / (rx * rx) + (dy * dy) / (R * R);
+            if (n > 1) continue;
+            const X = ex + dx, Y = ey + dy;
+            let c = front ? '#f7931a' : '#d97c12';
+            if (rx <= 3) c = hatch(X, Y) ? '#a35708' : '#c87912';          // edge-on rim
+            else if (n > 0.72) c = (dx * -0.6 - dy * 0.6 > 0)              // milled rim:
+              ? (hatch(X, Y) ? '#ffd27a' : c)                              //  lit top-left
+              : (hatch(X, Y) ? '#a35708' : c);                             //  shaded bottom-right
+            else if (Math.abs(dx + dy * 0.4 - sheen) < 1.4) c = hatch(X, Y) ? '#ffe9a8' : '#ffc964'; // sheen
+            px(X, Y, c);
+          }
+
+        // the ₿ turns with the face: columns compress by cos(rot) and
+        // mirror on the reverse side, vanishing only near edge-on
+        if (Math.abs(cosR) > 0.25 && rx > 3) {
+          const glyph = FONT.glyphs['B'];
+          const sym = [];
+          for (let gr = 0; gr < 7; gr++)
+            for (let gc = 0; gc < 5; gc++)
+              if (glyph[gr] & (16 >> gc)) sym.push([Math.round((gc - 2) * cosR), 13 + gr]);
+          [[-1, 12], [1, 12], [-1, 20], [1, 20]]                 // the prongs
+            .forEach(([pc, y]) => sym.push([Math.round(pc * cosR), y]));
+          for (const [ox, y] of sym)                             // embossed dark ring
+            for (const [nx, ny] of OUTLINE8) px(ex + ox + nx, y + ny, '#7a4206');
+          for (const [ox, y] of sym) px(ex + ox, y, front ? '#fff2d8' : '#f7dca8');
+        }
+        if ((f % 40) < 4) { // periodic glint off the rim
+          const s = [1, 2, 2, 1][f % 40 % 4];
+          for (let k = -s; k <= s; k++) { px(23 + k, 8, '#ffffff'); px(23, 8 + k, '#ffffff'); }
+        }
+
+        // readouts
+        drawText('BITCOIN', 36, 1, '#f7931a');
+        if (!live) drawText('SAMPLE', 84, 1, '#5a6a75');
+        const up = chg >= 0;
+        const ctxt = `24H ${up ? '+' : ''}${chg.toFixed(2)}%`;
+        drawText(ctxt, 190 - measureText(ctxt), 1, up ? '#2ecc40' : '#ff4136');
+
+        drawText(`$${Math.round(price).toLocaleString('en-US')}`, 36, 9, '#ffffff', 2);
+
+        if (high != null) {
+          const x = drawText(`HI ${Math.round(high).toLocaleString('en-US')}`, 36, 25, '#ff9e9e');
+          drawText(`LO ${Math.round(low).toLocaleString('en-US')}`, x + 8, 25, '#9ecbff');
+        }
+      },
+    },
+    {
+      id: 'gas', name: 'Gas',
+      render(f) {
+        if (!gasData) {
+          drawText('LOADING GAS PRICES', (FBW - measureText('LOADING GAS PRICES')) / 2, 12, '#8f99a3');
+          return;
+        }
+        const { regular, mid, premium, diesel, weekAgo, stateName, live } = gasData;
+        const beat = Math.floor(f / 5);
+
+        // gas pump, centered in the left graphic zone
+        rect(8, 6, 14, 2, '#8a1818');                  // cap
+        rect(8, 8, 14, 18, '#c02828');                 // body
+        for (let y = 8; y < 26; y++)                   // right-side shading
+          for (let x = 18; x < 22; x++) if (hatch(x, y)) px(x, y, '#8a1818');
+        rect(10, 10, 10, 6, '#0c1208');                // screen
+        for (let i = 0; i < 4; i++) {                  // price digits ticking over
+          const on = ((beat + i * 2) % 5) !== 0;
+          rect(11 + i * 2, 12 + ((beat + i) & 1), 1, 2, on ? '#3adb4a' : '#155a1e');
+        }
+        rect(10, 18, 10, 1, '#8a1818');                // trim line
+        rect(12, 20, 6, 4, '#e8e8e8');                 // brand plate
+        rect(7, 26, 17, 2, '#3a3a3a');                 // base
+        [[22,10],[23,10],[24,11],[25,12],[25,14],[25,16],[25,18],[25,20],[24,22],[24,23]]
+          .forEach(([x, y]) => px(x, y, '#222'));      // hose
+        rect(23, 8, 3, 3, '#555');                     // nozzle holster
+        px((beat & 3) === 0 ? 26 : 25, 24, '#3adb4a'); // drip wink
+
+        // readouts
+        drawText(`GAS • ${stateName.toUpperCase()} AVG`, 36, 1, '#ffffff');
+        if (!live) drawText('SAMPLE', 98, 12, '#5a6a75');
+        drawText(`$${regular.toFixed(2)}`, 36, 9, '#ffffff', 2);
+        drawText('REGULAR', 36, 25, '#8f99a3');
+        if (weekAgo) {
+          const d = regular - weekAgo;
+          const wk = `WK ${d >= 0 ? '+' : '-'}${Math.abs(d).toFixed(2)}`;
+          drawText(wk, 36 + measureText('REGULAR') + 8, 25, d > 0.005 ? '#ff4136' : '#2ecc40');
+        }
+        const rx = 130;
+        const line = (label, v, y) => {
+          drawText(label, rx, y, '#8f99a3');
+          const t = `$${v.toFixed(2)}`;
+          drawText(t, 190 - measureText(t), y, '#ffd27a');
+        };
+        line('MID', mid, 1);
+        line('PREM', premium, 9);
+        line('DSL', diesel, 17);
+      },
+    },
+    {
+      id: 'air', name: 'Air Traffic',
+      render(f) {
+        if (!airData) {
+          drawText('SCANNING THE SKY', (FBW - measureText('SCANNING THE SKY')) / 2, 12, '#8f99a3');
+          return;
+        }
+        const beat = Math.floor(f / 5);
+        const KMX = 0.8, KMY = 1.6; // km per pixel (154 x 51 km window)
+
+        // field: home marker + dotted 25 km range ring
+        rect(0, 0, FBW, FBH, '#04070c');
+        for (let k = 0; k < 48; k += 2)
+          px(96 + Math.round(25 / KMX * Math.cos(k / 48 * 2 * Math.PI)),
+             16 + Math.round(25 / KMY * Math.sin(k / 48 * 2 * Math.PI)), '#101b2a');
+        px(96, 16, '#5a6a75'); px(95, 16, '#2a3540'); px(97, 16, '#2a3540');
+        px(96, 15, '#2a3540'); px(96, 17, '#2a3540');
+
+        // dead-reckon every aircraft from its last report
+        const now = Date.now() / 1000;
+        const DIRS = [[0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1]];
+        const shown = [];
+        for (const p of airData.planes) {
+          const dt = Math.min(600, Math.max(0, now - p.t));
+          const mLat = p.lat + p.vel * dt * Math.cos(p.trk * DEG) / 111320;
+          const mLon = p.lon + p.vel * dt * Math.sin(p.trk * DEG) / (111320 * Math.cos(p.lat * DEG));
+          let kx = (mLon - place.lon) * 111.32 * Math.cos(place.lat * DEG);
+          let ky = (mLat - place.lat) * 110.57;
+          if (p.sample) { // demo planes wrap around instead of flying away
+            kx = ((kx + 80) % 160 + 160) % 160 - 80;
+            ky = ((ky + 28) % 56 + 56) % 56 - 28;
+          }
+          const x = Math.round(96 + kx / KMX), y = Math.round(16 - ky / KMY);
+          if (x < -4 || x > 195 || y < -4 || y > 35) continue;
+          shown.push({ ...p, x, y, dist: Math.hypot(kx, ky) });
+        }
+        shown.sort((a, b) => b.dist - a.dist); // near planes draw on top
+
+        for (const p of shown) {
+          const col = p.alt < 1500 ? '#ffb020' : p.alt < 7000 ? '#40c8ff' : '#e8f0ff';
+          const dim = p.alt < 1500 ? '#5a3c08' : p.alt < 7000 ? '#123c50' : '#3a4250';
+          const [dx, dy] = DIRS[Math.round(p.trk / 45) & 7];
+          const pxp = [-dx, -dy]; // perpendicular-ish wings via the rotated tail
+          for (const k of [4, 7, 10]) px(p.x - dx * k, p.y - dy * k, dim); // fading trail
+          px(p.x - dy, p.y + dx, col); px(p.x + dy, p.y - dx, col);        // wings
+          px(p.x, p.y, col);
+          px(p.x + dx, p.y + dy, col); px(p.x + dx * 2, p.y + dy * 2, col); // nose
+        }
+
+        // callsign tags for the three nearest
+        const near = [...shown].sort((a, b) => a.dist - b.dist);
+        near.slice(0, 3).forEach(p => {
+          const lx = Math.min(FBW - measureText(p.cs) - 1, Math.max(0, p.x + 4));
+          drawText(p.cs, lx, Math.min(24, Math.max(1, p.y - 3)), '#c9c9c9');
+        });
+
+        // spotlight cycles through the nearest planes with full details
+        if (near.length) {
+          const s = near[Math.floor(f / (4 * FPS)) % Math.min(near.length, 6)];
+          if (beat & 1) [[-3,-3],[3,-3],[-3,3],[3,3]].forEach(([ox, oy]) =>
+            px(s.x + ox, s.y + oy, '#ffffff')); // blinking corner box
+          const ft = Math.round(s.alt * 3.28084 / 100) * 100;
+          const climb = s.vr > 2 ? ' +' : s.vr < -2 ? ' -' : '';
+          drawText(`${s.cs} • ${ft.toLocaleString('en-US')} FT • ${Math.round(s.vel * 2.237)} MPH${climb}`,
+            1, 25, s.alt < 1500 ? '#ffb020' : s.alt < 7000 ? '#40c8ff' : '#e8f0ff');
+        }
+
+        drawText('AIR TRAFFIC', 1, 1, '#40c8ff');
+        const n = `${shown.length} IN RANGE`;
+        drawText(n, 190 - measureText(n), 1, '#c9c9c9');
+        if (!airData.live) drawText('SAMPLE', 190 - measureText('SAMPLE'), 25, '#5a6a75');
+      },
+    },
+  ];
+
+  // ---------------------------------------------------------------
+  // Transitions — compose two RGB565 buffers into fb, t in (0..1]
+  // ---------------------------------------------------------------
+  const dissolveOrder = Array.from({ length: NPIX }, (_, i) => i);
+  for (let i = NPIX - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [dissolveOrder[i], dissolveOrder[j]] = [dissolveOrder[j], dissolveOrder[i]];
+  }
+
+  const TRANSITIONS = {
+    cut(old, nw) { fb.set(nw); },
+    wipe(old, nw, t) {
+      const edge = Math.round(t * FBW);
+      for (let y = 0; y < FBH; y++)
+        for (let x = 0; x < FBW; x++)
+          fb[y * FBW + x] = x < edge ? nw[y * FBW + x] : old[y * FBW + x];
+    },
+    beam(old, nw, t) { // wipe with a glowing scan column at the edge
+      TRANSITIONS.wipe(old, nw, t);
+      const edge = Math.round(t * FBW);
+      if (edge < FBW) for (let y = 0; y < FBH; y++) {
+        fb[y * FBW + edge] = 0xffff;
+        if (edge > 0) fb[y * FBW + edge - 1] = 0xbdf7; // dimmer trail
+      }
+    },
+    push(old, nw, t) { // new frame shoves the old one off to the left
+      const shift = Math.round(t * FBW);
+      for (let y = 0; y < FBH; y++)
+        for (let x = 0; x < FBW; x++)
+          fb[y * FBW + x] = x < FBW - shift
+            ? old[y * FBW + x + shift]
+            : nw[y * FBW + x - (FBW - shift)];
+    },
+    dissolve(old, nw, t) { // pixels flip in a fixed random order
+      fb.set(old);
+      const n = Math.round(t * NPIX);
+      for (let i = 0; i < n; i++) fb[dissolveOrder[i]] = nw[dissolveOrder[i]];
+    },
+    blinds(old, nw, t) { // venetian blinds, 8-row slats opening downward
+      for (let y = 0; y < FBH; y++) {
+        const open = (y % 8) < t * 8;
+        for (let x = 0; x < FBW; x++)
+          fb[y * FBW + x] = open ? nw[y * FBW + x] : old[y * FBW + x];
+      }
+    },
+    curtain(old, nw, t) { // new frame revealed outward from center
+      const w = Math.round(t * FBW / 2);
+      for (let y = 0; y < FBH; y++)
+        for (let x = 0; x < FBW; x++) {
+          const reveal = x >= FBW / 2 - w && x < FBW / 2 + w;
+          fb[y * FBW + x] = reveal ? nw[y * FBW + x] : old[y * FBW + x];
+        }
+    },
+  };
+  const TRANSITION_NAMES = {
+    random: 'Random',
+    cut: 'Cut', wipe: 'Wipe', beam: 'Light Beam', push: 'Push',
+    dissolve: 'Dissolve', blinds: 'Blinds', curtain: 'Curtain',
+  };
+
+  // each transition resolves its style when it starts, so Random picks once per switch
+  function startTransition(to, fast = false) {
+    const keys = Object.keys(TRANSITIONS);
+    const style = cfg.transition === 'random'
+      ? keys[Math.floor(Math.random() * keys.length)]
+      : cfg.transition;
+    return { old: Uint16Array.from(fb), to, frames: 0, fast, style };
+  }
+
+  // ---------------------------------------------------------------
+  // Config (persisted) + control panel
+  // ---------------------------------------------------------------
+  const byId = Object.fromEntries(channels.map(c => [c.id, c]));
+
+  const DEFAULT_CFG = {
+    channels: {
+      weather:   { on: true, secs: 12 },
+      today:     { on: true, secs: 10 },
+      forecast:  { on: true, secs: 10 },
+      clock:     { on: true, secs: 8 },
+      headlines: { on: true, secs: 25 },
+      moon:      { on: true, secs: 8 },
+      sun:       { on: true, secs: 8 },
+      stocks:    { on: true, secs: 10 },
+      radar:     { on: true, secs: 12 },
+      esports:   { on: true, secs: 12 },
+      launch:    { on: true, secs: 10 },
+      iss:       { on: true, secs: 10 },
+      motor:     { on: true, secs: 12 },
+      btc:       { on: true, secs: 10 },
+      gas:       { on: true, secs: 8 },
+      air:       { on: true, secs: 15 },
+      sports:    { on: true, secs: 15 },
+    },
+    // grouped: weather block, time + news, money, sky & space, sports
+    order: ['weather', 'today', 'forecast', 'radar', 'sun', 'moon',
+            'clock', 'headlines',
+            'stocks', 'btc', 'gas',
+            'launch', 'iss', 'air',
+            'sports', 'motor', 'esports'],
+    orderVersion: 5, // bump to re-apply the default grouping over saved orders
+    transition: 'random',
+    zip: '45040',
+    symbol: '^GSPC', // S&P 500
+    pixels: 'round',
+  };
+  let cfg, hadSavedCfg = false;
+  try {
+    const raw = localStorage.getItem('tickr-config');
+    hadSavedCfg = !!raw;
+    cfg = { ...DEFAULT_CFG, ...JSON.parse(raw) };
+    cfg.channels = { ...DEFAULT_CFG.channels, ...cfg.channels };
+  } catch { cfg = DEFAULT_CFG; }
+  // keep only known ids, append any channels missing from a saved order
+  cfg.order = [...(cfg.order || []).filter(id => byId[id]),
+               ...DEFAULT_CFG.order.filter(id => !(cfg.order || []).includes(id))];
+  // one-time migration when the default grouping changes
+  if (cfg.orderVersion !== DEFAULT_CFG.orderVersion) {
+    cfg.order = [...DEFAULT_CFG.order];
+    cfg.orderVersion = DEFAULT_CFG.orderVersion;
+    saveCfg();
+  }
+  if (!/^\d{5}$/.test(cfg.zip)) cfg.zip = DEFAULT_CFG.zip;
+  if (!/^[A-Z0-9.^=\-]{1,8}$/i.test(cfg.symbol || '')) cfg.symbol = DEFAULT_CFG.symbol;
+  cfg.symbol = cfg.symbol.toUpperCase();
+  if (!['square', 'round'].includes(cfg.pixels)) cfg.pixels = DEFAULT_CFG.pixels;
+
+  // switch the canvas between crisp 1:1 pixels and Tidbyt-style LED dots
+  function applyPixelStyle() {
+    if (cfg.pixels === 'round') {
+      canvas.width = FBW * DOT;
+      canvas.height = FBH * DOT;
+      if (canvas.classList) canvas.classList.add('round');
+      if (!gridCanvas && document.createElement) {
+        gridCanvas = document.createElement('canvas');
+        gridCanvas.width = FBW * DOT;
+        gridCanvas.height = FBH * DOT;
+        const g = gridCanvas.getContext('2d');
+        g.fillStyle = '#000';
+        g.fillRect(0, 0, gridCanvas.width, gridCanvas.height);
+        g.fillStyle = '#0e0e10'; // faint unlit LEDs
+        for (let y = 0; y < FBH; y++)
+          for (let x = 0; x < FBW; x++) {
+            g.beginPath();
+            g.arc(x * DOT + DOT / 2, y * DOT + DOT / 2, DOT_R, 0, 2 * Math.PI);
+            g.fill();
+          }
+      }
+    } else {
+      canvas.width = FBW;
+      canvas.height = FBH;
+      if (canvas.classList) canvas.classList.remove('round');
+    }
+  }
+  applyPixelStyle();
+  function saveCfg() {
+    try { localStorage.setItem('tickr-config', JSON.stringify(cfg)); } catch {}
+  }
+
+  const controls = document.getElementById('controls');
+  controls.innerHTML = `
+    <div id="chips">${cfg.order.map(id => {
+      const c = byId[id];
+      return `
+      <div class="chip" id="chip-${c.id}" data-id="${c.id}">
+        <span class="grip" id="grip-${c.id}" title="drag to reorder">⠿</span>
+        <input type="checkbox" id="on-${c.id}"
+          title="click cycles: on -> off -> override (red, stays on air)">
+        <span class="chname" id="name-${c.id}" title="jump to this channel">${c.name}</span>
+        ${c.id === 'stocks' ? `<input type="text" id="symbol" maxlength="8"
+          value="${cfg.symbol}" title="ticker symbol" style="width:70px;text-transform:uppercase">` : ''}
+        <input type="number" id="secs-${c.id}" min="2" max="99" value="${Math.min(99, cfg.channels[c.id].secs)}">
+        <span class="unit">s</span>
+      </div>`;
+    }).join('')}</div>
+    <div class="row">
+      <label for="zip">ZIP</label>
+      <input type="text" id="zip" inputmode="numeric" maxlength="5" value="${cfg.zip}"
+        title="ZIP code — used by weather, radar, sunrise, and ISS passes">
+      <label for="transition">Transition</label>
+      <select id="transition">
+        ${Object.entries(TRANSITION_NAMES).map(([k, name]) =>
+          `<option value="${k}" ${cfg.transition === k ? 'selected' : ''}>${name}</option>`).join('')}
+      </select>
+      <label for="pixels">Pixels</label>
+      <select id="pixels">
+        <option value="round" ${cfg.pixels === 'round' ? 'selected' : ''}>Round</option>
+        <option value="square" ${cfg.pixels === 'square' ? 'selected' : ''}>Square</option>
+      </select>
+    </div>
+    <div class="legend">
+      <span class="lg"><span class="lg-box lg-on">✓</span> in rotation</span>
+      <span class="lg"><span class="lg-box"></span> off</span>
+      <span class="lg"><span class="lg-box lg-ov">✓</span> override — only reds play</span>
+      <span class="lg"><span class="lg-chip"></span> on air</span>
+      <span class="lg">⠿ drag to reorder</span>
+      <span class="lg">click a name to jump</span>
+    </div>`;
+
+  // tri-state checkbox: on (check) -> override (red check) -> off
+  function paintChipState(c) {
+    const st = cfg.channels[c.id];
+    const box = document.getElementById(`on-${c.id}`);
+    const chip = document.getElementById(`chip-${c.id}`);
+    if (box && box.style) {
+      box.checked = !!(st.on || st.override);
+      box.style.accentColor = st.override ? '#e02020' : '';
+    }
+    if (chip && chip.classList) chip.classList.toggle('override', !!st.override);
+  }
+
+  channels.forEach(c => {
+    const on = document.getElementById(`on-${c.id}`);
+    if (on) on.addEventListener('click', e => {
+      e.preventDefault();
+      const st = cfg.channels[c.id];
+      if (st.override) { st.override = false; st.on = true; }  // red -> blue check
+      else if (st.on) { st.on = false; }                       // blue check -> empty
+      else { st.override = true; }                             // empty -> red check
+      // the browser restores the checkbox AFTER preventDefault, so
+      // repaint on the next tick or our state gets clobbered
+      setTimeout(() => paintChipState(c), 0);
+      saveCfg();
+    });
+    paintChipState(c);
+    const name = document.getElementById(`name-${c.id}`);
+    if (name) name.addEventListener('click', () => jumpToChannel(byId[c.id]));
+    const secs = document.getElementById(`secs-${c.id}`);
+    if (secs) secs.addEventListener('change', e => {
+      const v = Math.max(2, Math.min(99, parseInt(e.target.value, 10) || DEFAULT_CFG.channels[c.id].secs));
+      e.target.value = v;
+      cfg.channels[c.id].secs = v;
+      saveCfg();
+    });
+  });
+  const transSelect = document.getElementById('transition');
+  if (transSelect) transSelect.addEventListener('change', e => { cfg.transition = e.target.value; saveCfg(); });
+  const pixSelect = document.getElementById('pixels');
+  if (pixSelect) pixSelect.addEventListener('change', e => {
+    cfg.pixels = e.target.value;
+    saveCfg();
+    applyPixelStyle();
+  });
+  const zipInput = document.getElementById('zip');
+  if (zipInput) zipInput.addEventListener('change', e => {
+    const v = e.target.value.trim();
+    if (!/^\d{5}$/.test(v)) { e.target.value = cfg.zip; return; } // revert bad input
+    cfg.zip = v;
+    saveCfg();
+    setLocation(v);
+  });
+  const symInput = document.getElementById('symbol');
+  if (symInput) symInput.addEventListener('change', e => {
+    const v = e.target.value.trim().toUpperCase();
+    if (!/^[A-Z0-9.^=\-]{1,8}$/.test(v)) { e.target.value = cfg.symbol; return; }
+    e.target.value = v;
+    cfg.symbol = v;
+    saveCfg();
+    stockData = null; // show LOADING while the new symbol fetches
+    refreshStock();
+  });
+
+  // Drag-and-drop reordering: the grip arms the drag so the inputs stay usable
+  const chipsEl = document.getElementById('chips');
+  let dragEl = null;
+  channels.forEach(c => {
+    const chip = document.getElementById(`chip-${c.id}`);
+    const grip = document.getElementById(`grip-${c.id}`);
+    if (!chip || !grip || !chip.classList) return;
+    grip.addEventListener('mousedown', () => { chip.draggable = true; });
+    chip.addEventListener('dragstart', e => {
+      dragEl = chip;
+      chip.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', c.id); // required by Firefox
+    });
+    chip.addEventListener('dragend', () => {
+      chip.draggable = false;
+      chip.classList.remove('dragging');
+      dragEl = null;
+      cfg.order = [...chipsEl.querySelectorAll('.chip')].map(el => el.dataset.id);
+      saveCfg();
+    });
+  });
+  if (chipsEl && chipsEl.addEventListener) chipsEl.addEventListener('dragover', e => {
+    e.preventDefault(); // allow drop
+    if (!dragEl) return;
+    // live-reorder: insert before the first chip whose midpoint is right of the cursor
+    const after = [...chipsEl.querySelectorAll('.chip:not(.dragging)')].find(el => {
+      const r = el.getBoundingClientRect();
+      return e.clientX < r.left + r.width / 2;
+    });
+    if (after) chipsEl.insertBefore(dragEl, after);
+    else chipsEl.appendChild(dragEl);
+  });
+
+  // ---------------------------------------------------------------
+  // Scheduler: rotates enabled channels, runs transitions between
+  // ---------------------------------------------------------------
+  const chanBuf = new Uint16Array(NPIX); // offscreen render target
+  let current = null;    // channel being shown
+  let curFrames = 0;     // frames current channel has been up
+  let trans = null;      // { old: Uint16Array, to: channel, frames }
+
+  // Channels with `resume: true` keep a persistent frame clock, so
+  // progressive content (marquees, rotating cards) picks up where it
+  // left off on the next cycle instead of restarting.
+  const chanClock = {};
+  function channelFrame(ch, localFrames) {
+    if (!ch.resume) return localFrames;
+    chanClock[ch.id] = (chanClock[ch.id] || 0) + 1;
+    return chanClock[ch.id];
+  }
+
+  // rotation follows the chip order. Red-check overrides commandeer
+  // the programme: with any set, only override channels rotate.
+  const enabledChannels = () => {
+    const all = cfg.order.map(id => byId[id]).filter(Boolean);
+    const ov = all.filter(c => cfg.channels[c.id].override);
+    return ov.length ? ov : all.filter(c => cfg.channels[c.id].on);
+  };
+
+  // clicking a channel's name jumps straight to it
+  function jumpToChannel(ch) {
+    if (!ch || !current) return;
+    const en = enabledChannels();
+    if (!en.includes(ch)) return;      // off-air channels can't be jumped to
+    if ((trans ? trans.to : current) === ch) return;
+    trans = startTransition(ch, true);
+  }
+
+  let activeChipId = null;
+  function markActiveChip(id) {
+    if (id === activeChipId) return;
+    for (const c of channels) {
+      const chip = document.getElementById(`chip-${c.id}`);
+      if (chip && chip.classList) chip.classList.toggle('active', c.id === id);
+    }
+    activeChipId = id;
+  }
+
+  function tick() {
+    globalFrame++;
+    const en = enabledChannels();
+
+    if (!en.length) {
+      fb.fill(0);
+      drawText('ALL CHANNELS OFF', (FBW - measureText('ALL CHANNELS OFF')) / 2, 12, '#5a5a5a');
+      blit();
+      markActiveChip(null);
+      return;
+    }
+
+    if (trans) {
+      markActiveChip(trans.to.id);
+      trans.frames++;
+      // manual (arrow-key) flips run a quicker transition
+      const dur = trans.style === 'cut' ? 1 : Math.round((trans.fast ? 0.35 : 0.7) * FPS);
+      const t = Math.min(1, trans.frames / dur);
+      const tf = channelFrame(trans.to, trans.frames);
+      renderInto(chanBuf, () => trans.to.render(tf));
+      TRANSITIONS[trans.style](trans.old, chanBuf, t);
+      if (t >= 1) {
+        current = trans.to;
+        curFrames = trans.frames;
+        trans = null;
+      }
+      blit();
+      return;
+    }
+
+    if (!current) { current = en[0]; curFrames = 0; }
+    markActiveChip(current.id);
+
+    curFrames++;
+    const cf = channelFrame(current, curFrames);
+    renderInto(chanBuf, () => current.render(cf));
+    fb.set(chanBuf);
+    blit();
+
+    const expired = curFrames >= cfg.channels[current.id].secs * FPS;
+    const orphaned = !en.includes(current); // was toggled off while showing
+    if ((expired && en.length > 1) || orphaned) {
+      const i = en.indexOf(current);
+      const next = orphaned ? en[0] : en[(i + 1) % en.length];
+      trans = startTransition(next);
+    }
+  }
+
+  // First visit: ask for the ZIP so every location channel is theirs
+  function initZipModal() {
+    const modal = document.getElementById('zipmodal');
+    if (!modal || !modal.classList) return;
+    const input = document.getElementById('zipstart');
+    const go = document.getElementById('zipgo');
+    modal.classList.remove('hidden');
+    setTimeout(() => { if (input.focus) input.focus(); }, 50);
+    const close = () => modal.classList.add('hidden');
+    const submit = () => {
+      const v = (input.value || '').trim();
+      if (!/^\d{5}$/.test(v)) { input.style.borderColor = '#ff4136'; return; }
+      cfg.zip = v;
+      saveCfg();
+      const zi = document.getElementById('zip');
+      if (zi) zi.value = v;
+      setLocation(v);
+      close();
+    };
+    go.addEventListener('click', submit);
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') submit();
+      if (e.key === 'Escape') close();
+      e.stopPropagation(); // keep arrows/etc from flipping channels underneath
+    });
+    modal.addEventListener('click', e => { if (e.target === modal) close(); });
+  }
+  if (!hadSavedCfg) initZipModal();
+
+  // Arrow keys flip through the programme (right = next, left = previous)
+  function skipChannel(dir) {
+    const en = enabledChannels();
+    if (!en.length || !current) return;
+    const base = trans ? trans.to : current; // chain flips smoothly mid-transition
+    let i = en.indexOf(base);
+    if (i === -1) i = 0;
+    const next = en[(i + dir + en.length) % en.length];
+    if (next === base) return;
+    trans = startTransition(next, true);
+  }
+  if (document.addEventListener) document.addEventListener('keydown', e => {
+    if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
+    if (e.key === 'ArrowRight') { skipChannel(1); e.preventDefault(); }
+    else if (e.key === 'ArrowLeft') { skipChannel(-1); e.preventDefault(); }
+  });
+
+  setLocation(cfg.zip); // geocode the saved ZIP, then fetch its weather
+  refreshNews();
+  refreshStock();
+  refreshLaunch();
+  refreshISS();
+  refreshAstros();
+  refreshMotor();
+  refreshBTC();
+  refreshGas();
+  refreshAir();
+  refreshSports();
+  setInterval(refreshWeather, 10 * 60 * 1000); // re-fetch weather every 10 min
+  setInterval(refreshNews, 15 * 60 * 1000);    // re-fetch headlines every 15 min
+  setInterval(refreshStock, 2 * 60 * 1000);    // re-fetch quotes every 2 min
+  setInterval(refreshRadar, 5 * 60 * 1000);    // re-fetch radar every 5 min
+  setInterval(refreshLaunch, 30 * 60 * 1000);  // re-fetch launches every 30 min
+  setInterval(refreshISS, 2 * 60 * 1000);      // re-sync ISS orbit every 2 min
+  setInterval(refreshAstros, 30 * 60 * 1000);  // re-fetch crew count every 30 min
+  setInterval(refreshMotor, 60 * 60 * 1000);   // re-fetch race schedule hourly
+  setInterval(refreshBTC, 60 * 1000);          // re-fetch bitcoin every minute
+  setInterval(refreshGas, 3 * 3600 * 1000);    // re-fetch gas prices every 3h
+  setInterval(refreshAir, 4 * 60 * 1000);      // re-sync aircraft every 4 min
+  setInterval(refreshSports, 2 * 60 * 1000);   // live scores every 2 min
+  setInterval(tick, 1000 / FPS);               // 20 fps heartbeat
+</script>
+</body>
+</html>
