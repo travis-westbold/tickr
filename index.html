@@ -1492,9 +1492,11 @@
         CITY_HOUSES.forEach(([hx, hw], i) => {
           const bodyTop = 25;
           rect(hx, bodyTop, hw, 5, nightMode ? sil : ['#7a6a58', '#6e6252', '#75685c', '#6a5e50'][i]);
-          for (let r2 = 0; r2 < 3; r2++)                        // pitched roof
-            rect(hx + r2, bodyTop - 3 + r2, hw - r2 * 2, 1,
+          for (let r2 = 0; r2 < 3; r2++) {                      // pitched roof, peak up
+            const inset = 2 - r2;
+            rect(hx + inset, bodyTop - 3 + r2, hw - inset * 2, 1,
               nightMode ? sil : ['#6a4436', '#565048', '#5e4a3c', '#4e4a44'][i]);
+          }
           const dx2 = hx + hw - 3;
           if (!nightMode) {
             rect(dx2, 27, 2, 3, '#3a2a1e');                     // door
