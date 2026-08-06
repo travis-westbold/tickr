@@ -62,9 +62,11 @@ plus a `DEFAULT_CFG.channels` entry and a spot in `DEFAULT_CFG.order`.
 Default programme order groups related channels (IA rule — keep it when
 adding channels; bump `orderVersion` if the default grouping changes):
 
-- Weather block: weather, radar (RainViewer), sunrise/sunset, moon phase
-- Time + news: clock, headlines (HN)
+- Weather block: weather, day parts, 5-day forecast, radar (RainViewer),
+  sunrise/sunset, moon phase
+- Time + news: clock (analog + digital), headlines (HN)
 - Money: stocks (Yahoo via proxy), bitcoin (Coinbase), gas (AAA via proxy)
 - Sky & space: rocket launch (Launch Library), ISS tracker (wheretheiss.at +
   local orbit propagation), air traffic (OpenSky/adsb.lol via proxy)
-- Sports: motorsport (ESPN F1/NASCAR/IndyCar), esports (demo data)
+- Sports: sports scores (ESPN MLB/NFL/NBA/NHL/MLS), motorsport (ESPN
+  F1/NASCAR/IndyCar), esports (demo data)
