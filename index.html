@@ -1360,7 +1360,7 @@
   // Tiny city geometry — suburbs left, dense downtown center, low
   // commercial strip right. [x, width, height]
   const CITY_HOUSES = [[2, 10], [15, 9], [27, 10], [39, 8]];  // + trees between
-  const CITY_TREES = [13, 25, 49];
+  const CITY_TREES = [13, 25];
   const CITY_TOWERS = [
     [56, 7, 11], [63, 8, 14], [71, 6, 9], [77, 9, 16], [86, 7, 12],
     [93, 8, 10], [101, 7, 15], [108, 8, 12], [116, 6, 8], [122, 8, 13], [130, 6, 10],
@@ -1512,6 +1512,24 @@
           px(t, 29, nightMode ? '#0a0c10' : '#4a3626');
         });
 
+        // the neighborhood water tower: tank on legs, slow red blink
+        {
+          const wx0 = 46, tankY = 16;
+          [[48, 21], [53, 21], [50, 22]].forEach(([lx, ly]) =>
+            rect(lx, ly, 1, 30 - ly, nightMode ? sil : '#3a424c'));
+          rect(48, 26, 6, 1, nightMode ? sil : '#39424c');      // cross brace
+          rect(wx0 + 1, tankY, 8, 5, nightMode ? sil : '#7e8892');
+          if (!nightMode)
+            for (let y = tankY; y < tankY + 5; y++)
+              for (let x = wx0 + 6; x < wx0 + 9; x++)
+                if (hatch(x, y)) px(x, y, '#6a747e');           // shaded side
+          rect(wx0 + 2, tankY - 1, 6, 1, nightMode ? sil : '#5a626c'); // conical roof
+          rect(wx0 + 3, tankY - 2, 4, 1, nightMode ? sil : '#525a64');
+          px(wx0 + 4, tankY - 3, nightMode
+            ? ((beat & 7) === 0 ? '#ff4136' : '#3a1010') : '#4a525c');
+
+        }
+
         // downtown: dense small towers, window grids
         CITY_TOWERS.forEach(([bx, bw, bh], i) => {
           const top = 30 - bh;
@@ -1529,6 +1547,29 @@
         });
         px(81, 12, (beat & 3) === 0 ? '#ff4136' : '#5a1616');   // beacon on the tallest
         rect(81, 13, 1, 1, sil);
+
+        // broadcast mast behind the strip: lattice legs, beacon, ripples
+        {
+          const mx0 = 164, topY = 7;
+          for (let y = topY + 3; y <= 29; y++) {
+            const spread = Math.min(3, Math.round((y - topY) / 8));
+            px(mx0 - spread, y, nightMode ? sil : '#4a545e');
+            px(mx0 + spread, y, nightMode ? sil : '#4a545e');
+            if ((y - topY) % 3 === 0 && spread > 0)
+              rect(mx0 - spread, y, spread * 2 + 1, 1, nightMode ? sil : '#39424c');
+          }
+          rect(mx0, topY, 1, 3, nightMode ? sil : '#5a646e');
+          px(mx0, topY - 1, (beat & 3) === 2 ? '#ff4136' : '#5a1616');
+          if (nightMode) { // it's on the air
+            const ph = (beat >> 1) % 3, rr = 3 + ph * 2;
+            for (let k = -2; k <= 2; k++) {
+              const ang = -Math.PI / 2 + k * 0.35;
+              px(mx0 + Math.round(Math.cos(ang) * rr),
+                 topY - 1 + Math.round(Math.sin(ang) * rr),
+                 ph === 2 ? '#3a5a78' : '#6a9ac8');
+            }
+          }
+        }
 
         // commercial strip: flat roofs, AC units, storefronts, one neon sign
         CITY_SHOPS.forEach(([bx, bw, bh], i) => {
