@@ -1,8 +1,8 @@
 # tickr
 
 A virtual 192×32 LED ticker in a single HTML file — a tiny TV station for your
-desk. Seventeen data channels rotate like programming, localized to your ZIP
-code.
+desk. Twenty-seven data channels rotate like programming, localized to your
+ZIP code.
 
 **Live:** https://tickr-travis-westboldcoms-projects.vercel.app
 
@@ -11,10 +11,17 @@ code.
 Grouped into themed programme blocks:
 
 - **Weather** — current conditions · day-parts forecast (morning→tonight,
-  current part highlighted) · 5-day forecast · live NWS-palette radar with
-  motion loop · animated sunrise/sunset scenes with shifting skies and
-  twinkling stars · moon phase (the real near side, pixelized from a
-  photograph, with earthshine)
+  current part highlighted) · 5-day forecast · rain-soon nowcast ("RAIN IN
+  24 MIN" with a 3-hour intensity timeline) · live NWS-palette radar with
+  motion loop
+- **Conditions** — air quality (US AQI gauge) · wildfire smoke · pollen ·
+  UV index with scale + advice · humidity/dew point (a droplet that fills) ·
+  wind compass · snowfall outlook
+- **Sky** — animated sunrise/sunset scenes with shifting skies and twinkling
+  stars · golden hour windows with a camera that blinks REC during the good
+  light · moon phase (the real near side, pixelized from a photograph, with
+  earthshine) · stargazing score (clouds + moon + haze; great nights get the
+  milky way, epic nights get aurora)
 - **Time & news** — analog + digital clock in the ZIP's timezone · Hacker
   News marquee
 - **Money** — stocks (default S&P 500, any Yahoo symbol) with intraday

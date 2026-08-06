@@ -5,8 +5,8 @@ Read this (and `PRD.md`) before making changes. Everything lives in one
 
 ## What this is
 
-A virtual 192×32 LED ticker web app — a rotating "TV station" of 17 data
-channels, deployed on Vercel with four serverless proxies under `api/`.
+A virtual 192×32 LED ticker web app — a rotating "TV station" of 27 data
+channels, deployed on Vercel with five serverless proxies under `api/`.
 
 - **Live site:** https://tickr-travis-westboldcoms-projects.vercel.app
   (stable URL; per-deploy URLs like `tickr-xxxx-...` are frozen snapshots —
@@ -52,7 +52,9 @@ channels, deployed on Vercel with four serverless proxies under `api/`.
 
 | Source | Used for | Quirk |
 |---|---|---|
-| Open-Meteo | weather, day parts, 5-day, sun times, tz offset | keyless, CORS-open, one call for everything |
+| Open-Meteo | weather, day parts, 5-day, rain-soon (minutely_15), UV, humidity/dew, wind, snow, sun/golden times, stargazing clouds, tz offset | keyless, CORS-open, ONE call for everything |
+| Open-Meteo AQ API | air quality, wildfire smoke, stargazing haze | separate host air-quality-api.open-meteo.com, CORS-open |
+| pollen.com | pollen index + triggers | needs UA+Referer headers → `api/pollen.js` proxy; US-only source |
 | zippopotam.us | ZIP → lat/lon/state | CORS-open |
 | RainViewer | radar tiles | CORS-open; color scheme 6 = NEXRAD, smoothing 0; sampled per-pixel |
 | Hacker News API | headlines | CORS-open |

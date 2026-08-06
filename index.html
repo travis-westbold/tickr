@@ -559,10 +559,11 @@
 
   const weatherApi = () =>
     `https://api.open-meteo.com/v1/forecast?latitude=${place.lat}&longitude=${place.lon}` +
-    '&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m' +
-    '&daily=temperature_2m_max,temperature_2m_min,sunrise,sunset,weather_code,precipitation_probability_max' +
-    '&hourly=temperature_2m,weather_code,precipitation_probability' +
-    '&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=auto&forecast_days=7';
+    '&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,dew_point_2m,uv_index,cloud_cover' +
+    '&daily=temperature_2m_max,temperature_2m_min,sunrise,sunset,weather_code,precipitation_probability_max,uv_index_max,snowfall_sum' +
+    '&hourly=temperature_2m,weather_code,precipitation_probability,cloud_cover' +
+    '&minutely_15=precipitation' +
+    '&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto&forecast_days=7';
 
   // Snapshot from 2026-08-06 10:45 EDT (Mason/Maineville OH area)
   const WEATHER_FALLBACK = {
@@ -575,25 +576,44 @@
       weather_code: 1,
       wind_speed_10m: 3.4,
       wind_direction_10m: 157,
+      wind_gusts_10m: 9.2,
+      dew_point_2m: 66.1,
+      uv_index: 6.4,
+      cloud_cover: 30,
     },
+    // 15-min precipitation timeline: rain arriving in ~30 min (demo)
+    minutely_15: (() => {
+      const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      const base = new Date(Math.floor(Date.now() / 900000) * 900000);
+      const time = [], precipitation = [];
+      const pat = [0, 0, 0.02, 0.06, 0.09, 0.05, 0.02, 0, 0, 0, 0.01, 0, 0, 0, 0, 0];
+      for (let i = 0; i < 16; i++) {
+        time.push(fmt(new Date(base.getTime() + i * 900000)));
+        precipitation.push(pat[i]);
+      }
+      return { time, precipitation };
+    })(),
     daily: {
       temperature_2m_max: [90.5, 88.1, 84.4, 79.9, 82.6, 85.2, 87.0],
       temperature_2m_min: [67.3, 69.0, 66.2, 62.8, 61.5, 63.9, 65.5],
       weather_code: [1, 2, 95, 61, 3, 0, 2],
       precipitation_probability_max: [20, 35, 85, 70, 30, 5, 15],
+      uv_index_max: [8.1, 7.6, 4.2, 5.0, 7.9, 8.4, 8.0],
+      snowfall_sum: [0, 0, 0, 0, 0, 0, 0],
       sunrise: ['2026-08-06T06:45', '2026-08-07T06:46'],
       sunset:  ['2026-08-06T20:44', '2026-08-07T20:42'],
     },
     // synthetic 48h hourly forecast so the day-parts channel works offline
     hourly: (() => {
-      const temperature_2m = [], weather_code = [], precipitation_probability = [];
+      const temperature_2m = [], weather_code = [], precipitation_probability = [], cloud_cover = [];
       for (let i = 0; i < 48; i++) {
         const h = i % 24;
         temperature_2m.push(Math.round(78 + 12 * Math.sin((h - 9) / 24 * 2 * Math.PI)));
         weather_code.push(h >= 14 && h <= 16 ? 61 : h >= 17 && h <= 18 ? 95 : h >= 11 ? 2 : 1);
         precipitation_probability.push(h >= 14 && h <= 18 ? 70 : h >= 11 ? 25 : 5);
+        cloud_cover.push(h >= 14 && h <= 18 ? 80 : 15);
       }
-      return { temperature_2m, weather_code, precipitation_probability };
+      return { temperature_2m, weather_code, precipitation_probability, cloud_cover };
     })(),
   };
 
@@ -615,6 +635,21 @@
       `weather for ${place.name}: ${live ? 'live' : 'cached snapshot'} · observed ${timeStr} · open-meteo.com`;
   }
 
+  // trim the 15-min precipitation series to a parsed near-future window
+  function prepRainTimeline() {
+    weatherData._m15 = null;
+    const m = weatherData.minutely_15;
+    if (!m || !m.time) return;
+    const now = locNow();
+    const arr = [];
+    for (let i = 0; i < m.time.length && arr.length < 13; i++) {
+      const t = new Date(m.time[i]);
+      if (t.getTime() >= now.getTime() - 900000)
+        arr.push({ t, v: m.precipitation[i] || 0 });
+    }
+    weatherData._m15 = arr;
+  }
+
   async function refreshWeather() {
     try {
       const res = await fetch(weatherApi());
@@ -628,6 +663,7 @@
       locTzOffsetSec = WEATHER_FALLBACK.utc_offset_seconds;
       setStatus(WEATHER_FALLBACK, false);
     }
+    prepRainTimeline();
   }
 
   // Look up a US ZIP's coordinates, then pull that location's weather
@@ -648,6 +684,8 @@
     if (typeof computeIssPass === 'function') computeIssPass(); // pass prediction too
     if (typeof refreshGas === 'function') refreshGas();     // state average follows too
     if (typeof refreshAir === 'function') refreshAir();     // air traffic recenters too
+    if (typeof refreshAQ === 'function') refreshAQ();       // air quality follows too
+    if (typeof refreshPollen === 'function') refreshPollen();
   }
 
   // ---------------------------------------------------------------
@@ -990,6 +1028,63 @@
     }
     gasData = { regular: 3.99, mid: 4.55, premium: 5.08, diesel: 5.26,
                 weekAgo: 3.90, stateName: place.stateName || 'Ohio', live: false };
+  }
+
+  // ---------------------------------------------------------------
+  // Air quality (Open-Meteo AQ API, CORS-open) + pollen (pollen.com
+  // via our proxy — no free keyless pollen API exists for the US)
+  // ---------------------------------------------------------------
+  let aqData = null, pollenData = null;
+
+  async function refreshAQ() {
+    try {
+      const r = await fetch(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${place.lat}&longitude=${place.lon}` +
+        '&current=us_aqi,pm2_5,pm10,ozone,aerosol_optical_depth,dust&timezone=auto');
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      const c = j.current;
+      aqData = { aqi: c.us_aqi, pm25: c.pm2_5, pm10: c.pm10, ozone: c.ozone,
+                 aod: c.aerosol_optical_depth, dust: c.dust, live: true };
+    } catch (err) {
+      console.log('air quality fetch failed:', err.message);
+      aqData = { aqi: 42, pm25: 9.8, pm10: 18, ozone: 61, aod: 0.12, dust: 1, live: false };
+    }
+  }
+
+  async function refreshPollen() {
+    for (const url of [`/api/pollen?zip=${cfg.zip}`, `${DEPLOY_BASE}/api/pollen?zip=${cfg.zip}`]) {
+      try {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = await r.json();
+        if (j.index == null) throw new Error('no index');
+        pollenData = { index: j.index, triggers: j.triggers || [], live: true };
+        return;
+      } catch (err) { console.log(`pollen source failed (${url.slice(0, 30)}):`, err.message); }
+    }
+    pollenData = { index: 7.4, triggers: ['GRASSES', 'RAGWEED'], live: false };
+  }
+
+  // AQI / UV / pollen category ladders
+  const AQI_LADDER = [[50, 'GOOD', '#2ecc40'], [100, 'MODERATE', '#ffe000'],
+    [150, 'UNHEALTHY SENS', '#ff8c30'], [200, 'UNHEALTHY', '#ff4136'],
+    [300, 'VERY UNHEALTHY', '#b04ad6'], [1e9, 'HAZARDOUS', '#c02040']];
+  const ladder = (L, v) => L.find(([lim]) => v <= lim);
+
+  // semicircular gauge: colored arc + needle, face-left graphic
+  function drawGauge(cx, cy, r, frac, segs) {
+    const N = 26;
+    for (let k = 0; k <= N; k++) {
+      const a = Math.PI + k / N * Math.PI;
+      const c = segs[Math.min(segs.length - 1, Math.floor(k / (N + 1) * segs.length))];
+      for (const rr of [r, r - 1]) {
+        px(Math.round(cx + Math.cos(a) * rr), Math.round(cy + Math.sin(a) * rr), c);
+      }
+    }
+    const na = Math.PI + Math.min(1, Math.max(0, frac)) * Math.PI;
+    for (let k = 2; k <= r - 3; k++)
+      px(Math.round(cx + Math.cos(na) * k), Math.round(cy + Math.sin(na) * k), '#ffffff');
+    px(cx, cy, '#ffd27a');
   }
 
   // ---------------------------------------------------------------
@@ -2201,6 +2296,390 @@
         if (!airData.live) drawText('SAMPLE', 190 - measureText('SAMPLE'), 25, '#5a6a75');
       },
     },
+    {
+      id: 'rainsoon', name: 'Rain Soon',
+      render(f) {
+        if (!weatherData || !weatherData._m15) {
+          drawText('LOADING PRECIP', (FBW - measureText('LOADING PRECIP')) / 2, 12, '#8f99a3');
+          return;
+        }
+        const beat = Math.floor(f / 5);
+        drawCloud(4, 4, WHITE_CLOUD);
+        drops(beat, '#55aaff');
+
+        const m15 = weatherData._m15;
+        const now = locNow();
+        let headline = 'NO RAIN NEXT 3 HOURS', hcol = '#8f99a3';
+        const first = m15.find(s => s.v > 0.004 && s.t.getTime() + 900000 > now.getTime());
+        if (first) {
+          const mins = Math.round((first.t - now) / 60000);
+          if (mins <= 0) { headline = 'RAINING NOW'; hcol = '#55aaff'; }
+          else { headline = `RAIN IN ${mins} MIN`; hcol = '#55aaff'; }
+        }
+        drawText(headline, 36, 1, hcol);
+        drawText('NEXT 3H', 190 - measureText('NEXT 3H'), 1, '#66707a');
+
+        // 15-min intensity bars
+        const bx = 36, bw = 12, byBase = 25, bh = 13;
+        const vmax = Math.max(0.08, ...m15.map(s => s.v));
+        m15.slice(0, 12).forEach((s2, i) => {
+          const h = Math.round(Math.min(1, s2.v / vmax) * bh);
+          rect(bx + i * (bw + 1), byBase - bh, bw, bh, '#101820');
+          if (h > 0) rect(bx + i * (bw + 1), byBase - h, bw, h,
+            s2.v > 0.06 ? '#2266cc' : s2.v > 0.02 ? '#3a8adb' : '#55aaff');
+        });
+        drawText('NOW', bx, 26, '#66707a');
+        drawText('+1H', bx + 4 * 13, 26, '#66707a');
+        drawText('+2H', bx + 8 * 13, 26, '#66707a');
+        drawText('+3H', 190 - measureText('+3H'), 26, '#66707a');
+      },
+    },
+    {
+      id: 'aqi', name: 'Air Quality',
+      render() {
+        if (!aqData) {
+          drawText('LOADING AIR DATA', (FBW - measureText('LOADING AIR DATA')) / 2, 12, '#8f99a3');
+          return;
+        }
+        const { aqi, pm25, ozone, live } = aqData;
+        drawGauge(16, 24, 13, Math.min(1, aqi / 300),
+          ['#2ecc40', '#ffe000', '#ff8c30', '#ff4136', '#b04ad6']);
+        const [, cat, col] = ladder(AQI_LADDER, aqi);
+        drawText('AIR QUALITY', 36, 1, '#ffffff');
+        drawText(live ? 'US AQI' : 'SAMPLE', 190 - measureText(live ? 'US AQI' : 'SAMPLE'), 1, '#66707a');
+        const x = drawText(`${Math.round(aqi)}`, 36, 9, '#ffffff', 2);
+        drawText(cat, x + 5, 14, col);
+        let bx2 = drawText('PM2.5 ', 36, 25, '#66707a');
+        bx2 = drawText(pm25.toFixed(1), bx2, 25, '#ffffff');
+        bx2 = drawText('  OZONE ', bx2, 25, '#66707a');
+        drawText(`${Math.round(ozone)}`, bx2, 25, '#ffffff');
+      },
+    },
+    {
+      id: 'smoke', name: 'Smoke',
+      render(f) {
+        if (!aqData) {
+          drawText('LOADING AIR DATA', (FBW - measureText('LOADING AIR DATA')) / 2, 12, '#8f99a3');
+          return;
+        }
+        const { pm25, aod, dust, live } = aqData;
+        const beat = Math.floor(f / 5);
+        // hazy sun: dimmed disc behind drifting smoke bands
+        for (let dy = -7; dy <= 7; dy++)
+          for (let dx = -7; dx <= 7; dx++)
+            if (dx * dx + dy * dy <= 52) px(16 + dx, 13 + dy, hatch(16 + dx, 13 + dy) ? '#b07a20' : '#d89a30');
+        for (let i = 0; i < 4; i++) {
+          const y = 8 + i * 5, sh = (beat + i * 2) % 6;
+          rect(3 + sh, y, 22, 2, i % 2 ? '#5a5a5a' : '#6e6e6e');
+        }
+        const lvl = pm25 < 12 ? ['CLEAR SKIES', '#2ecc40'] : pm25 < 35 ? ['LIGHT HAZE', '#ffe000']
+          : pm25 < 55 ? ['SMOKY', '#ff8c30'] : pm25 < 150 ? ['HEAVY SMOKE', '#ff4136'] : ['HAZARDOUS', '#b04ad6'];
+        drawText('WILDFIRE SMOKE', 36, 1, '#ffffff');
+        if (!live) drawText('SAMPLE', 190 - measureText('SAMPLE'), 1, '#66707a');
+        drawText(lvl[0], 36, 10, lvl[1], 1);
+        let x = drawText('PM2.5 ', 36, 25, '#66707a');
+        x = drawText(pm25.toFixed(1), x, 25, '#ffffff');
+        x = drawText('  AOD ', x, 25, '#66707a');
+        x = drawText((aod == null ? 0 : aod).toFixed(2), x, 25, '#ffffff');
+        x = drawText('  DUST ', x, 25, '#66707a');
+        drawText(`${Math.round(dust || 0)}`, x, 25, '#ffffff');
+      },
+    },
+    {
+      id: 'pollen', name: 'Pollen',
+      render(f) {
+        if (!pollenData) {
+          drawText('LOADING POLLEN', (FBW - measureText('LOADING POLLEN')) / 2, 12, '#8f99a3');
+          return;
+        }
+        const { index, triggers, live } = pollenData;
+        const beat = Math.floor(f / 5);
+        // flower: petals, center, stem, leaf — and a patrolling bee
+        const cx = 15, cy = 12;
+        [[0, -5], [5, -2], [3, 4], [-3, 4], [-5, -2]].forEach(([ox, oy]) => {
+          for (let dy = -2; dy <= 2; dy++)
+            for (let dx = -2; dx <= 2; dx++)
+              if (dx * dx + dy * dy <= 5)
+                px(cx + ox + dx, cy + oy + dy, hatch(cx + ox + dx, cy + oy + dy) ? '#e88ab8' : '#ffb8d8');
+        });
+        for (let dy = -2; dy <= 2; dy++)
+          for (let dx = -2; dx <= 2; dx++)
+            if (dx * dx + dy * dy <= 5) px(cx + dx, cy + dy, hatch(cx + dx, cy + dy) ? '#c8a018' : '#ffd400');
+        rect(cx, cy + 7, 1, 9, '#2c8c3c');
+        px(cx - 1, cy + 10, '#3aa04a'); px(cx - 2, cy + 10, '#3aa04a'); px(cx - 2, cy + 9, '#3aa04a');
+        const ba = beat / 4 * Math.PI;
+        const bx3 = cx + Math.round(11 * Math.cos(ba)), by3 = cy + Math.round(7 * Math.sin(ba));
+        px(bx3, by3, '#ffd400'); px(bx3 + 1, by3, '#15151a');
+
+        const lvl = index < 2.5 ? ['LOW', '#2ecc40'] : index < 4.9 ? ['LOW-MED', '#9ef0a0']
+          : index < 7.3 ? ['MEDIUM', '#ffe000'] : index < 9.7 ? ['MED-HIGH', '#ff8c30'] : ['HIGH', '#ff4136'];
+        drawText('POLLEN', 36, 1, '#ffffff');
+        drawText(live ? 'OF 12' : 'SAMPLE', 190 - measureText(live ? 'OF 12' : 'SAMPLE'), 1, '#66707a');
+        const x = drawText(index.toFixed(1), 36, 9, '#ffffff', 2);
+        drawText(lvl[0], x + 5, 14, lvl[1]);
+        drawText(sanitize(triggers.join(' • ').toUpperCase()), 36, 25, '#8f99a3');
+      },
+    },
+    {
+      id: 'uv', name: 'UV Index',
+      render(f) {
+        if (!weatherData || weatherData.current.uv_index == null) {
+          drawText('LOADING UV', (FBW - measureText('LOADING UV')) / 2, 12, '#8f99a3');
+          return;
+        }
+        const uv = weatherData.current.uv_index;
+        const peak = (weatherData.daily.uv_index_max || [uv])[0];
+        drawSun(16, 14, 6, Math.floor(f / 5));
+        const lvl = uv < 3 ? ['LOW', '#2ecc40'] : uv < 6 ? ['MODERATE', '#ffe000']
+          : uv < 8 ? ['HIGH', '#ff8c30'] : uv < 11 ? ['VERY HIGH', '#ff4136'] : ['EXTREME', '#b04ad6'];
+        const advice = uv < 3 ? 'NO PROTECTION NEEDED' : uv < 6 ? 'SPF ADVISED'
+          : uv < 8 ? 'SEEK SHADE MIDDAY' : 'AVOID MIDDAY SUN';
+        drawText('UV INDEX', 36, 1, '#ffffff');
+        let hx = drawText('PEAK ', 190 - measureText(`PEAK ${Math.round(peak)}`), 1, '#66707a');
+        drawText(`${Math.round(peak)}`, hx, 1, '#ffffff');
+        const x = drawText(uv.toFixed(1), 36, 9, '#ffffff', 2);
+        drawText(lvl[0], x + 5, 9, lvl[1]);
+        drawText(advice, x + 5, 16, '#8f99a3');
+        // 0..11+ scale with current + peak markers
+        const sx = 36, sw = 154;
+        const segs = ['#2ecc40', '#ffe000', '#ff8c30', '#ff4136', '#b04ad6'];
+        for (let i = 0; i < sw; i++)
+          px(sx + i, 26, segs[Math.min(4, Math.floor(i / sw * 5))]);
+        rect(sx + Math.round(Math.min(1, uv / 11) * (sw - 1)), 24, 1, 4, '#ffffff');
+        rect(sx + Math.round(Math.min(1, peak / 11) * (sw - 1)), 25, 1, 2, '#c9c9c9');
+      },
+    },
+    {
+      id: 'humidity', name: 'Humidity',
+      render() {
+        if (!weatherData || weatherData.current.dew_point_2m == null) {
+          drawText('LOADING HUMIDITY', (FBW - measureText('LOADING HUMIDITY')) / 2, 12, '#8f99a3');
+          return;
+        }
+        const hum = weatherData.current.relative_humidity_2m;
+        const dew = weatherData.current.dew_point_2m;
+        // droplet that fills to the humidity level
+        const cx = 15, cy2 = 18, r = 8, topY = 4;
+        const inDrop = (x, y) => {
+          const dx = x - cx, dy = y - cy2;
+          if (dx * dx + dy * dy <= r * r + 3) return true;
+          return y >= topY && y < cy2 && Math.abs(dx) <= (y - topY) * r / (cy2 - topY);
+        };
+        const fillY = Math.round(26 - (26 - topY) * hum / 100);
+        for (let y = topY - 1; y <= 27; y++)
+          for (let x = cx - r - 1; x <= cx + r + 1; x++) {
+            if (!inDrop(x, y)) continue;
+            const edge = !inDrop(x - 1, y) || !inDrop(x + 1, y) || !inDrop(x, y - 1) || !inDrop(x, y + 1);
+            if (y >= fillY) px(x, y, hatch(x, y) ? '#3a8adb' : '#55aaff');
+            else px(x, y, edge ? '#4a6a8a' : '#101c2a');
+          }
+        px(cx - 3, cy2 - 3, '#c8e8ff'); px(cx - 2, cy2 - 4, '#c8e8ff'); // glint
+
+        const comfort = dew < 55 ? ['PLEASANT', '#2ecc40'] : dew < 60 ? ['COMFORTABLE', '#9ef0a0']
+          : dew < 65 ? ['STICKY', '#ffe000'] : dew < 70 ? ['HUMID', '#ff8c30'] : ['OPPRESSIVE', '#ff4136'];
+        drawText('HUMIDITY', 36, 1, '#ffffff');
+        const x = drawText(`${Math.round(hum)}%`, 36, 9, '#ffffff', 2);
+        drawText(comfort[0], x + 5, 14, comfort[1]);
+        let dx2 = drawText('DEW POINT ', 36, 25, '#66707a');
+        drawText(`${Math.round(dew)}°`, dx2, 25, '#9ecbff');
+      },
+    },
+    {
+      id: 'wind', name: 'Wind',
+      render(f) {
+        if (!weatherData) {
+          drawText('LOADING WIND', (FBW - measureText('LOADING WIND')) / 2, 12, '#8f99a3');
+          return;
+        }
+        const cur = weatherData.current;
+        const spd = cur.wind_speed_10m, gust = cur.wind_gusts_10m, dir = cur.wind_direction_10m;
+        // compass rose with a needle showing where the wind blows toward
+        const cx = 16, cy = 16, r = 13;
+        for (let k = 0; k < 16; k++) {
+          const a = k / 16 * 2 * Math.PI;
+          px(cx + Math.round(Math.sin(a) * r), cy - Math.round(Math.cos(a) * r),
+             k % 4 === 0 ? '#9aa6b2' : '#454f5a');
+        }
+        const wob = Math.sin(f / 9) * 0.06;
+        const na = (dir + 180) * DEG + wob; // blowing toward
+        for (let k = 1; k <= r - 4; k++)
+          px(cx + Math.round(Math.sin(na) * k), cy - Math.round(Math.cos(na) * k), '#9ef0a0');
+        const tx2 = cx + Math.round(Math.sin(na) * (r - 3)), ty2 = cy - Math.round(Math.cos(na) * (r - 3));
+        px(tx2, ty2, '#ffffff');
+        for (let k = 1; k <= 4; k++) // dim tail on the from side
+          px(cx - Math.round(Math.sin(na) * k), cy + Math.round(Math.cos(na) * k), '#2c4a34');
+        px(cx, cy, '#ffd27a');
+
+        drawText('WIND', 36, 1, '#ffffff');
+        const cardinal = COMPASS[Math.round(dir / 22.5) % 16];
+        drawText(cardinal, 190 - measureText(cardinal), 1, '#9ef0a0');
+        let x = drawText(`${Math.round(spd)}`, 36, 9, '#ffffff', 2);
+        drawText('MPH', x + 4, 16, '#66707a');
+        x = drawText('GUSTS ', 36, 25, '#66707a');
+        drawText(`${Math.round(gust || 0)} MPH`, x, 25, '#ffffff');
+      },
+    },
+    {
+      id: 'snowcast', name: 'Snowfall',
+      render(f) {
+        if (!weatherData || !weatherData.daily.snowfall_sum) {
+          drawText('LOADING SNOW', (FBW - measureText('LOADING SNOW')) / 2, 12, '#8f99a3');
+          return;
+        }
+        const beat = Math.floor(f / 5);
+        // six-armed flake with hatched crystal tips and a twinkle
+        const cx = 16, cy = 16;
+        for (let k = 0; k < 6; k++) {
+          const a = k / 6 * 2 * Math.PI;
+          for (let d = 1; d <= 10; d++)
+            px(cx + Math.round(Math.sin(a) * d), cy - Math.round(Math.cos(a) * d), d > 7 ? '#9ecbff' : '#e8f4ff');
+          for (const s of [-1, 1]) { // side branches
+            const ba = a + s * 0.5;
+            for (let d = 1; d <= 3; d++)
+              px(cx + Math.round(Math.sin(a) * 6 + Math.sin(ba) * d),
+                 cy - Math.round(Math.cos(a) * 6 + Math.cos(ba) * d), '#9ecbff');
+          }
+        }
+        px(cx, cy, '#ffffff');
+        const tw = [[6, 6], [26, 9], [8, 25]][beat % 3];
+        px(tw[0], tw[1], (beat & 1) ? '#ffffff' : '#4a6a8a');
+
+        const snow = weatherData.daily.snowfall_sum;
+        const total = snow.slice(0, 5).reduce((a2, b) => a2 + (b || 0), 0);
+        drawText('SNOWFALL', 36, 1, '#ffffff');
+        drawText('5 DAY', 190 - measureText('5 DAY'), 1, '#66707a');
+        if (total < 0.05) {
+          drawText('NO SNOW EXPECTED', 36, 11, '#8f99a3');
+          drawText('NEXT 5 DAYS', 36, 20, '#66707a');
+        } else {
+          const x = drawText(`${total.toFixed(1)}"`, 36, 9, '#ffffff', 2);
+          drawText('TOTAL', x + 5, 14, '#66707a');
+          const today = locNow().getDay();
+          const vmax = Math.max(0.5, ...snow.slice(0, 5));
+          for (let i = 0; i < 5; i++) {
+            const bx4 = 110 + i * 17;
+            const h = Math.round(Math.min(1, (snow[i] || 0) / vmax) * 14);
+            rect(bx4, 24 - 14, 12, 14, '#101820');
+            if (h > 0) rect(bx4, 24 - h, 12, h, '#9ecbff');
+            drawText(DAYS[(today + i) % 7].slice(0, 1), bx4 + 4, 25, '#66707a');
+          }
+        }
+      },
+    },
+    {
+      id: 'golden', name: 'Golden Hour',
+      render(f) {
+        if (!weatherData || !weatherData.daily.sunrise) {
+          drawText('LOADING SUN DATA', (FBW - measureText('LOADING SUN DATA')) / 2, 12, '#8f99a3');
+          return;
+        }
+        const beat = Math.floor(f / 5);
+        const now = locNow();
+        const D2 = weatherData.daily;
+        // windows: hour after sunrise, hour before sunset (today, then tomorrow)
+        const wins = [];
+        for (let i = 0; i < 2; i++) {
+          if (D2.sunrise[i]) { const t = new Date(D2.sunrise[i]); wins.push({ a: t, b: new Date(t.getTime() + 3600000), tag: 'MORNING' }); }
+          if (D2.sunset[i]) { const t = new Date(D2.sunset[i]); wins.push({ a: new Date(t.getTime() - 3600000), b: t, tag: 'EVENING' }); }
+        }
+        wins.sort((x, y) => x.a - y.a);
+        const active = wins.find(w => now >= w.a && now <= w.b);
+        const next = wins.find(w => w.a > now);
+
+        // camera: body, layered lens, viewfinder, blinking REC in the window
+        rect(3, 10, 26, 15, '#2a323c');
+        rect(3, 10, 26, 2, '#3a4650');
+        rect(6, 7, 7, 3, '#3a4650');                 // viewfinder hump
+        for (let dy = -5; dy <= 5; dy++)             // lens rings
+          for (let dx = -5; dx <= 5; dx++) {
+            const d2 = dx * dx + dy * dy;
+            if (d2 > 29) continue;
+            px(19 + dx, 17 + dy, d2 <= 4 ? '#101820' : d2 <= 12 ? '#1c2a3a' : '#4a545e');
+          }
+        px(17, 15, '#c8e8ff');                       // lens glint
+        rect(6, 14, 6, 6, active ? '#c8a018' : '#15202a'); // capture window
+        if (active && (beat & 1)) px(26, 12, '#ff4136');   // REC blink
+
+        drawText('GOLDEN HOUR', 36, 1, '#ffd27a');
+        const fmtT = d => { const h2 = d.getHours() % 12 || 12; return `${h2}:${String(d.getMinutes()).padStart(2, '0')}${d.getHours() >= 12 ? 'P' : 'A'}`; };
+        if (active) {
+          drawText('NOW', 190 - measureText('NOW'), 1, (beat & 1) ? '#ffd27a' : '#8a6a20');
+          const mins = Math.max(0, Math.round((active.b - now) / 60000));
+          const x = drawText('GREAT LIGHT ', 36, 10, '#ffffff');
+          drawText(`ENDS IN ${mins}M`, x, 10, '#ffd27a');
+        } else if (next) {
+          const mins = Math.round((next.a - now) / 60000);
+          const cd = mins >= 60 ? `IN ${Math.floor(mins / 60)}H ${mins % 60}M` : `IN ${mins}M`;
+          let x = drawText(`${next.tag} LIGHT `, 36, 10, '#66707a');
+          drawText(cd, x, 10, '#9ef0a0');
+        }
+        const morn = wins.find(w => w.tag === 'MORNING'), eve = wins.find(w => w.tag === 'EVENING');
+        if (morn) {
+          let x = drawText('AM ', 36, 19, '#66707a');
+          drawText(`${fmtT(morn.a)}-${fmtT(morn.b)}`, x, 19, active === morn ? '#ffd27a' : '#c9c9c9');
+        }
+        if (eve) {
+          let x = drawText('PM ', 36, 27, '#66707a');
+          drawText(`${fmtT(eve.a)}-${fmtT(eve.b)}`, x, 27, active === eve ? '#ffd27a' : '#c9c9c9');
+        }
+      },
+    },
+    {
+      id: 'stars', name: 'Stargazing',
+      render(f) {
+        if (!weatherData || !weatherData.hourly) {
+          drawText('LOADING SKY DATA', (FBW - measureText('LOADING SKY DATA')) / 2, 12, '#8f99a3');
+          return;
+        }
+        const beat = Math.floor(f / 5);
+        // score: tonight's clouds, moon brightness, haze
+        const cc = weatherData.hourly.cloud_cover || [];
+        const hrs = [21, 22, 23, 24, 25, 26, 27, 28, 29].map(i => cc[i]).filter(v => v != null);
+        const cloud = hrs.length ? hrs.reduce((a, b) => a + b, 0) / hrs.length : 50;
+        const SYN = 29.530588853;
+        const mp = ((((Date.now() - Date.UTC(2000, 0, 6, 18, 14)) / 86400000) % SYN + SYN) % SYN) / SYN;
+        const illum = (1 - Math.cos(2 * Math.PI * mp)) / 2 * 100;
+        const pm25 = aqData ? aqData.pm25 : 10;
+        const score = Math.max(0, Math.min(10,
+          10 - cloud * 0.065 - illum * 0.025 - Math.min(1.5, pm25 / 25)));
+
+        // the night sky itself, dressed to the score
+        const rnd = i => { const v = Math.sin(i * 127.1) * 43758.5453; return v - Math.floor(v); };
+        if (score >= 8) { // epic night: aurora curtains + milky way
+          for (let x = 0; x < FBW; x += 2) {
+            const hgt = 4 + Math.round(3 * Math.sin(x / 17 + beat / 6));
+            for (let y = 0; y < hgt; y++)
+              if (hatch(x, y)) px(x, y, y < 2 ? '#3a1a5e' : '#1a6e3a');
+          }
+        }
+        if (score >= 5.5) { // milky way band
+          for (let x = 0; x < FBW; x++) {
+            const cyb = 20 - x * 0.055;
+            for (let dy = -3; dy <= 3; dy++) {
+              const y = Math.round(cyb + dy);
+              if (y < 0 || y > 31) continue;
+              if (rnd(x * 31 + y) < 0.3 - Math.abs(dy) * 0.07) px(x, y, '#3a4258');
+            }
+          }
+        }
+        const nStars = Math.round(12 + score * 9);
+        for (let i = 0; i < nStars; i++) {
+          const x = Math.floor(rnd(i + 1) * FBW), y = Math.floor(rnd(i + 101) * FBH);
+          const tw = ((beat + i) % 7) === 0;
+          px(x, y, tw ? '#ffffff' : score >= 7 ? '#aab8d8' : '#5a6478');
+        }
+
+        const verdict = score < 2 ? ['POOR', '#ff4136'] : score < 4.5 ? ['FAIR', '#ff8c30']
+          : score < 6.5 ? ['GOOD', '#ffe000'] : score < 8.5 ? ['GREAT', '#2ecc40'] : ['EPIC', '#9ef0a0'];
+        drawText('STARGAZING', 2, 1, '#ffffff');
+        const x = drawText(score.toFixed(1), 2, 9, '#ffffff', 2);
+        drawText(verdict[0], x + 5, 14, verdict[1]);
+        let fx = drawText('CLOUD ', 2, 25, '#66707a');
+        fx = drawText(`${Math.round(cloud)}%`, fx, 25, '#c9c9c9');
+        fx = drawText('  MOON ', fx, 25, '#66707a');
+        drawText(`${Math.round(illum)}%`, fx, 25, '#c9c9c9');
+      },
+    },
   ];
 
   // ---------------------------------------------------------------
@@ -2282,6 +2761,16 @@
       weather:   { on: true, secs: 12 },
       today:     { on: true, secs: 10 },
       forecast:  { on: true, secs: 10 },
+      rainsoon:  { on: true, secs: 8 },
+      aqi:       { on: true, secs: 8 },
+      smoke:     { on: true, secs: 8 },
+      pollen:    { on: true, secs: 8 },
+      uv:        { on: true, secs: 8 },
+      humidity:  { on: true, secs: 8 },
+      wind:      { on: true, secs: 8 },
+      snowcast:  { on: true, secs: 8 },
+      golden:    { on: true, secs: 8 },
+      stars:     { on: true, secs: 10 },
       clock:     { on: true, secs: 8 },
       headlines: { on: true, secs: 25 },
       moon:      { on: true, secs: 8 },
@@ -2297,13 +2786,15 @@
       air:       { on: true, secs: 15 },
       sports:    { on: true, secs: 15 },
     },
-    // grouped: weather block, time + news, money, sky & space, sports
-    order: ['weather', 'today', 'forecast', 'radar', 'sun', 'moon',
+    // grouped: weather, conditions, sky, time + news, money, space, sports
+    order: ['weather', 'today', 'forecast', 'rainsoon', 'radar',
+            'aqi', 'smoke', 'pollen', 'uv', 'humidity', 'wind', 'snowcast',
+            'sun', 'golden', 'moon', 'stars',
             'clock', 'headlines',
             'stocks', 'btc', 'gas',
             'launch', 'iss', 'air',
             'sports', 'motor', 'esports'],
-    orderVersion: 5, // bump to re-apply the default grouping over saved orders
+    orderVersion: 6, // bump to re-apply the default grouping over saved orders
     transition: 'random',
     zip: '45040',
     symbol: '^GSPC', // S&P 500
@@ -2649,6 +3140,8 @@
   refreshGas();
   refreshAir();
   refreshSports();
+  refreshAQ();
+  refreshPollen();
   setInterval(refreshWeather, 10 * 60 * 1000); // re-fetch weather every 10 min
   setInterval(refreshNews, 15 * 60 * 1000);    // re-fetch headlines every 15 min
   setInterval(refreshStock, 2 * 60 * 1000);    // re-fetch quotes every 2 min
@@ -2661,6 +3154,8 @@
   setInterval(refreshGas, 3 * 3600 * 1000);    // re-fetch gas prices every 3h
   setInterval(refreshAir, 4 * 60 * 1000);      // re-sync aircraft every 4 min
   setInterval(refreshSports, 2 * 60 * 1000);   // live scores every 2 min
+  setInterval(refreshAQ, 30 * 60 * 1000);      // air quality every 30 min
+  setInterval(refreshPollen, 3 * 3600 * 1000); // pollen every 3h
   setInterval(tick, 1000 / FPS);               // 20 fps heartbeat
 </script>
 </body>

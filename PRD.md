@@ -62,8 +62,11 @@ plus a `DEFAULT_CFG.channels` entry and a spot in `DEFAULT_CFG.order`.
 Default programme order groups related channels (IA rule — keep it when
 adding channels; bump `orderVersion` if the default grouping changes):
 
-- Weather block: weather, day parts, 5-day forecast, radar (RainViewer),
-  sunrise/sunset, moon phase
+- Weather block: weather, day parts, 5-day forecast, rain soon (minutely_15),
+  radar (RainViewer)
+- Conditions: air quality + wildfire smoke (Open-Meteo AQ API), pollen
+  (pollen.com via proxy), UV, humidity/dew point, wind, snowfall
+- Sky: sunrise/sunset, golden hour, moon phase, stargazing score
 - Time + news: clock (analog + digital), headlines (HN)
 - Money: stocks (Yahoo via proxy), bitcoin (Coinbase), gas (AAA via proxy)
 - Sky & space: rocket launch (Launch Library), ISS tracker (wheretheiss.at +
