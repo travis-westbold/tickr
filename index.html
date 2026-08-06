@@ -1357,13 +1357,15 @@
   const FPS = 20;
   let globalFrame = 0;
 
-  // Tiny city skyline geometry: [x, width, height-from-ground]
-  const CITY_BLDGS = [
-    [0, 14, 8], [14, 10, 13], [24, 8, 6], [32, 12, 17], [44, 9, 9],
-    [53, 13, 21], [66, 10, 12], [76, 8, 7], [84, 14, 15], [98, 9, 10],
-    [107, 12, 19], [119, 8, 8], [127, 13, 12], [140, 10, 16], [150, 9, 7],
-    [159, 12, 11], [171, 10, 14], [181, 11, 6],
+  // Tiny city geometry — suburbs left, dense downtown center, low
+  // commercial strip right. [x, width, height]
+  const CITY_HOUSES = [[2, 10], [15, 9], [27, 10], [39, 8]];  // + trees between
+  const CITY_TREES = [13, 25, 49];
+  const CITY_TOWERS = [
+    [56, 7, 11], [63, 8, 14], [71, 6, 9], [77, 9, 16], [86, 7, 12],
+    [93, 8, 10], [101, 7, 15], [108, 8, 12], [116, 6, 8], [122, 8, 13], [130, 6, 10],
   ];
+  const CITY_SHOPS = [[138, 15, 8], [154, 13, 6], [168, 11, 9], [180, 11, 7]];
   // sky palette across sun-altitude stages (bottom band -> zenith)
   const CITY_SKY = [
     ['#0a0e1e', '#080a18', '#050712', '#03040c'],   // deep night
@@ -1480,23 +1482,74 @@
           miniCloud(cxp, cyp, cc2, alt > 0.1 ? '#67717c' : '#181e28');
         }
 
-        // skyline: silhouettes, lit windows after dark, beacon on the tower
+        // the town: facade detail by day, lights after dark
         const nightness = alt < -0.05 ? 1 : alt < 0.15 ? 0.6 : 0;
-        for (const [bx, bw, bh] of CITY_BLDGS) {
+        const nightMode = nightness > 0.3;
+        const sil = nightness >= 1 ? '#0a0c12' : '#10151d';
+        const litc = c => flash ? '#ffffff' : c;
+
+        // suburbs: little houses with pitched roofs, trees between
+        CITY_HOUSES.forEach(([hx, hw], i) => {
+          const bodyTop = 25;
+          rect(hx, bodyTop, hw, 5, nightMode ? sil : ['#7a6a58', '#6e6252', '#75685c', '#6a5e50'][i]);
+          for (let r2 = 0; r2 < 3; r2++)                        // pitched roof
+            rect(hx + r2, bodyTop - 3 + r2, hw - r2 * 2, 1,
+              nightMode ? sil : ['#6a4436', '#565048', '#5e4a3c', '#4e4a44'][i]);
+          const dx2 = hx + hw - 3;
+          if (!nightMode) {
+            rect(dx2, 27, 2, 3, '#3a2a1e');                     // door
+            rect(hx + 2, 26, 2, 2, '#2a3543');                  // window
+          } else {
+            if (rnd(i * 31.7) < 0.75 * nightness) rect(hx + 2, 26, 2, 2, litc('#ffd27a'));
+            px(dx2, 26, litc('#ffe9a0'));                       // porch light
+          }
+        });
+        CITY_TREES.forEach(t => {
+          for (let dy = -2; dy <= 1; dy++)
+            for (let dx3 = -2; dx3 <= 2; dx3++)
+              if (dx3 * dx3 + dy * dy <= 4)
+                px(t + dx3, 26 + dy, nightMode ? '#0c1410' : (hatch(t + dx3, 26 + dy) ? '#2c6a34' : '#38823e'));
+          px(t, 29, nightMode ? '#0a0c10' : '#4a3626');
+        });
+
+        // downtown: dense small towers, window grids
+        CITY_TOWERS.forEach(([bx, bw, bh], i) => {
           const top = 30 - bh;
-          rect(bx, top, bw, bh, '#0a0c12');
-          if (nightness > 0)
-            for (let wy = top + 2; wy < 28; wy += 3)
-              for (let wx = bx + 2; wx < bx + bw - 1; wx += 3) {
+          rect(bx, top, bw, bh, nightMode ? sil : ['#3d4650', '#47525e', '#35404a'][i % 3]);
+          if (!nightMode) rect(bx, top, bw, 1, '#5a6570');      // roofline catch light
+          for (let wy = top + 2; wy < 28; wy += 3)
+            for (let wx = bx + 1; wx < bx + bw - 1; wx += 2) {
+              if (nightMode) {
                 const seed = wx * 13.7 + wy * 7.3;
                 let lit = rnd(seed) < 0.5 * nightness;
-                if (rnd(seed + 0.3) < 0.08 && ((beat >> 4) + wx) & 1) lit = !lit; // someone's home
-                if (lit) px(wx, wy, flash ? '#ffffff' : '#ffd27a');
-              }
-        }
-        px(58, 6, (beat & 3) === 0 ? '#ff4136' : '#5a1616'); // tower beacon
-        rect(58, 7, 1, 2, '#0a0c12');
-        rect(0, 30, FBW, 2, '#0a0f0a'); // ground
+                if (rnd(seed + 0.3) < 0.08 && ((beat >> 4) + wx) & 1) lit = !lit;
+                if (lit) px(wx, wy, litc('#ffd27a'));
+              } else px(wx, wy, '#232b34');                     // daytime glass
+            }
+        });
+        px(81, 12, (beat & 3) === 0 ? '#ff4136' : '#5a1616');   // beacon on the tallest
+        rect(81, 13, 1, 1, sil);
+
+        // commercial strip: flat roofs, AC units, storefronts, one neon sign
+        CITY_SHOPS.forEach(([bx, bw, bh], i) => {
+          const top = 30 - bh;
+          rect(bx, top, bw, bh, nightMode ? sil : ['#4f5866', '#48505c', '#525a68', '#454e5a'][i]);
+          if (!nightMode) {
+            rect(bx, top, bw, 1, '#66707c');
+            rect(bx + 2, top - 2, 3, 2, '#39424c');             // rooftop AC
+            rect(bx + 1, 27, bw - 2, 2, '#222a33');             // storefront glass
+          } else {
+            rect(bx + 2, top - 2, 3, 2, sil);
+            for (let sxp = bx + 1; sxp < bx + bw - 2; sxp += 4)
+              if (rnd(sxp * 3.3) < 0.5 * nightness) rect(sxp, 27, 3, 2, litc('#c8d8e8'));
+          }
+          if (i === 2) { // the neon sign
+            rect(bx + 3, top - 4, 5, 3, nightMode
+              ? ((beat >> 2) & 1 ? '#e0446a' : '#8a2040') : '#3a3038');
+            rect(bx + 5, top - 1, 1, 1, sil);
+          }
+        });
+        rect(0, 30, FBW, 2, nightMode ? '#0a0f0a' : '#1a2416'); // ground
 
         // weather in the foreground
         if (raining) for (let i = 0; i < 16; i++) {
