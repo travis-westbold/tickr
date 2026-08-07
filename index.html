@@ -839,11 +839,27 @@
           }
         return buf;
       }));
-      radarData = { frames, live: true };
+      radarData = { frames, live: true, ...scanRadarSeverity(frames[frames.length - 1]) };
     } catch (err) {
       console.log('radar fetch failed, using sample:', err.message);
       radarData = sampleRadar();
+      Object.assign(radarData, scanRadarSeverity(radarData.frames[radarData.frames.length - 1]));
     }
+  }
+
+  // severity summary of a radar frame: overhead box + whole window.
+  // Lets other channels (tiny city, rain soon) trust observed echoes
+  // over the forecast model's often-late weather code.
+  function scanRadarSeverity(buf) {
+    let centerSev = 0, areaSev = 0;
+    for (let i = 0; i < NPIX; i++) {
+      if (!buf[i]) continue;
+      const sv = radarSeverity(buf[i]);
+      areaSev = Math.max(areaSev, sv);
+      const cx = i % FBW, cy = (i / FBW) | 0;
+      if (cx >= 84 && cx <= 108 && cy >= 10 && cy <= 22) centerSev = Math.max(centerSev, sv);
+    }
+    return { centerSev, areaSev };
   }
 
   // rough echo severity from an RGB565 radar pixel
@@ -1388,10 +1404,13 @@
         const now = locNow();
         const D = weatherData.daily;
         const code = weatherData.current.weather_code;
-        const raining = (code >= 51 && code <= 67) || (code >= 80 && code <= 82) || code >= 95;
+        // observed radar echoes overhead trump the model's weather code
+        const rsev = radarData && radarData.live ? radarData.centerSev || 0 : 0;
+        const storming = code >= 95 || rsev >= 3;
+        const raining = (code >= 51 && code <= 67) || (code >= 80 && code <= 82) || storming || rsev >= 1.5;
         const snowing = (code >= 71 && code <= 77) || code === 85 || code === 86;
-        const storming = code >= 95;
-        const cloudy = code === 3 ? 6 : code === 2 ? 3 : code === 1 ? 1 : 0;
+        let cloudy = code === 3 ? 6 : code === 2 ? 3 : code === 1 ? 1 : 0;
+        if (raining) cloudy = Math.max(cloudy, storming ? 5 : 4);
 
         // where is the sun? altitude in [-1, 1] from today's real sun times
         const sr = new Date(D.sunrise[0]), ss = new Date(D.sunset[0]);
@@ -2582,6 +2601,11 @@
           const mins = Math.round((first.t - now) / 60000);
           if (mins <= 0) { headline = 'RAINING NOW'; hcol = '#55aaff'; }
           else { headline = `RAIN IN ${mins} MIN`; hcol = '#55aaff'; }
+        }
+        // live radar overhead beats the model's opinion
+        if (radarData && radarData.live && radarData.centerSev >= 1.5) {
+          headline = radarData.centerSev >= 3 ? 'STORM OVERHEAD' : 'RAINING NOW';
+          hcol = radarData.centerSev >= 3 ? '#ffe000' : '#55aaff';
         }
         drawText(headline, 36, 1, hcol);
         drawText('NEXT 3H', 190 - measureText('NEXT 3H'), 1, '#66707a');
