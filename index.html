@@ -1520,6 +1520,10 @@
         const nightMode = nightness > 0.3;
         const sil = nightness >= 1 ? '#0a0c12' : '#10151d';
         const litc = c => flash ? '#ffffff' : c;
+        // daytime lights: most under a storm, a few under a deck, the
+        // odd early riser on a clear day
+        const gloomP = nightMode ? 0 : storming ? 0.45 : greySky ? 0.28 : 0.06;
+        const beaconsOn = nightMode || greySky;
 
         // suburbs: little houses with pitched roofs, trees between
         CITY_HOUSES.forEach(([hx, hw], i) => {
@@ -1533,7 +1537,8 @@
           const dx2 = hx + hw - 3;
           if (!nightMode) {
             rect(dx2, 27, 2, 3, '#3a2a1e');                     // door
-            rect(hx + 2, 26, 2, 2, '#2a3543');                  // window
+            rect(hx + 2, 26, 2, 2,
+              rnd(i * 31.7) < gloomP * 1.5 ? litc('#ffd27a') : '#2a3543'); // window
           } else {
             if (rnd(i * 31.7) < 0.75 * nightness) rect(hx + 2, 26, 2, 2, litc('#ffd27a'));
             px(dx2, 26, litc('#ffe9a0'));                       // porch light
@@ -1560,8 +1565,8 @@
                 if (hatch(x, y)) px(x, y, '#6a747e');           // shaded side
           rect(wx0 + 2, tankY - 1, 6, 1, nightMode ? sil : '#5a626c'); // conical roof
           rect(wx0 + 3, tankY - 2, 4, 1, nightMode ? sil : '#525a64');
-          px(wx0 + 4, tankY - 3, nightMode
-            ? ((beat & 7) === 0 ? '#ff4136' : '#3a1010') : '#4a525c');
+          px(wx0 + 4, tankY - 3, beaconsOn
+            ? ((beat & 7) === 7 ? '#3a1010' : '#ff4136') : '#4a525c'); // steady, brief wink
 
         }
 
@@ -1577,15 +1582,17 @@
                 let lit = rnd(seed) < 0.5 * nightness;
                 if (rnd(seed + 0.3) < 0.08 && ((beat >> 4) + wx) & 1) lit = !lit;
                 if (lit) px(wx, wy, litc('#ffd27a'));
-              } else px(wx, wy, '#232b34');                     // daytime glass
+              } else px(wx, wy, rnd(wx * 13.7 + wy * 7.3) < gloomP
+                ? litc('#ffd27a') : '#232b34');                 // daytime glass
             }
         });
         px(81, 12, (beat & 3) === 0 ? '#ff4136' : '#5a1616');   // beacon on the tallest
         rect(81, 13, 1, 1, sil);
 
         // broadcast mast behind the strip: lattice legs, beacon, ripples
+        // (sits at x=150 so the clock overlay never covers its light)
         {
-          const mx0 = 164, topY = 7;
+          const mx0 = 150, topY = 7;
           for (let y = topY + 3; y <= 29; y++) {
             const spread = Math.min(3, Math.round((y - topY) / 8));
             px(mx0 - spread, y, nightMode ? sil : '#4a545e');
@@ -1614,6 +1621,8 @@
             rect(bx, top, bw, 1, '#66707c');
             rect(bx + 2, top - 2, 3, 2, '#39424c');             // rooftop AC
             rect(bx + 1, 27, bw - 2, 2, '#222a33');             // storefront glass
+            for (let sxp = bx + 1; sxp < bx + bw - 2; sxp += 4)
+              if (rnd(sxp * 3.3) < gloomP) rect(sxp, 27, 3, 2, litc('#c8d8e8'));
           } else {
             rect(bx + 2, top - 2, 3, 2, sil);
             for (let sxp = bx + 1; sxp < bx + bw - 2; sxp += 4)
